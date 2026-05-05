@@ -41,6 +41,14 @@ class UsageInfo:
     event-log consumers (``alice_viewer.aggregators._usage_breakdown``)
     parse those exact keys from JSONL. Pi-side usage dicts map to
     these names in :func:`alice_pi.usage.pi_usage_to_info`.
+
+    Top-level fields are cumulative across the agent loop's internal
+    API calls (Claude Code aggregates them in ``ResultMessage.usage``).
+    ``iterations``, when populated, carries one dict per internal call
+    in order — useful for "post-turn context size" estimation, since
+    ``iterations[-1]`` reflects the last call's prompt size rather
+    than the sum-of-prompts across all calls. None for backends that
+    don't expose per-call breakdowns.
     """
 
     input_tokens: int
@@ -48,6 +56,7 @@ class UsageInfo:
     cache_read_input_tokens: Optional[int] = None
     cache_creation_input_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    iterations: Optional[list[dict[str, int]]] = None
 
 
 @dataclass

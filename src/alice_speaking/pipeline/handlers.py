@@ -140,23 +140,42 @@ class CompactionArmer(NullHandler):
             "output_tokens": summary.usage.output_tokens,
             "cache_read_input_tokens": summary.usage.cache_read_input_tokens,
             "cache_creation_input_tokens": summary.usage.cache_creation_input_tokens,
+            "iterations": summary.usage.iterations,
         }
         if compaction_module.should_compact(usage_dict, self._threshold):
             self._arm()
-            effective = (
-                (summary.usage.input_tokens or 0)
-                + (summary.usage.cache_read_input_tokens or 0)
-                + (summary.usage.cache_creation_input_tokens or 0)
-            )
-            log.info(
-                "compaction armed (effective_tokens=%d > threshold=%d; "
-                "input=%s cache_read=%s cache_create=%s)",
-                effective,
-                self._threshold,
-                summary.usage.input_tokens,
-                summary.usage.cache_read_input_tokens,
-                summary.usage.cache_creation_input_tokens,
-            )
+            iterations = summary.usage.iterations or []
+            last = iterations[-1] if iterations else None
+            if last:
+                effective = (
+                    (last.get("input_tokens") or 0)
+                    + (last.get("cache_read_input_tokens") or 0)
+                    + (last.get("cache_creation_input_tokens") or 0)
+                )
+                log.info(
+                    "compaction armed (last-call effective=%d > threshold=%d; "
+                    "iterations=%d cache_read=%s cache_create=%s)",
+                    effective,
+                    self._threshold,
+                    len(iterations),
+                    last.get("cache_read_input_tokens"),
+                    last.get("cache_creation_input_tokens"),
+                )
+            else:
+                effective = (
+                    (summary.usage.input_tokens or 0)
+                    + (summary.usage.cache_read_input_tokens or 0)
+                    + (summary.usage.cache_creation_input_tokens or 0)
+                )
+                log.info(
+                    "compaction armed (cumulative effective=%d > threshold=%d; "
+                    "no iterations breakdown — input=%s cache_read=%s cache_create=%s)",
+                    effective,
+                    self._threshold,
+                    summary.usage.input_tokens,
+                    summary.usage.cache_read_input_tokens,
+                    summary.usage.cache_creation_input_tokens,
+                )
 
 
 class CLITraceHandler(NullHandler):

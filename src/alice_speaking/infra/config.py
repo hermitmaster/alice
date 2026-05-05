@@ -51,11 +51,14 @@ SPEAKING_DEFAULTS: dict[str, Any] = {
     # bootstrap preamble when Layer 1 (session_id resume) fails or is missing.
     # See design-unified-context-compaction.md.
     "context_bootstrap_turns": 20,
-    # When ResultMessage.usage.input_tokens exceeds this value, flag the
-    # session for compaction. On the next event, run a summary turn, roll the
-    # session, and inject the summary + tail(5) turns as preamble. 150K ~= 75%
-    # of a 200K window — leaves runway for the compaction turn itself.
-    "context_compaction_threshold": 150_000,
+    # When the post-turn context size (= last internal API call's prompt
+    # size, read from ``usage.iterations[-1]``) exceeds this value, flag
+    # the session for compaction. On the next event, run a summary turn,
+    # roll the session, and inject the summary + tail(5) turns as preamble.
+    # 750K is well past the published 200K Opus 4.7 limit — Anthropic
+    # appears to extend via prompt caching, so we leave generous headroom
+    # rather than fire on phantom pressure.
+    "context_compaction_threshold": 750_000,
 }
 
 

@@ -105,10 +105,32 @@ def _thinking_to_sdk_dict(level: Optional[ThinkingLevel]) -> Optional[dict]:
     raise ValueError(f"unknown ThinkingLevel: {level!r}")
 
 
-def _anthropic_usage_to_info(raw: Optional[dict]) -> Optional[UsageInfo]:
-    """Convert Anthropic's ``ResultMessage.usage`` dict to
-    :class:`UsageInfo`. Returns ``None`` if the source is missing or
-    not a dict (errors before usage was emitted)."""
+def _normalize_iter_usage(raw: Any) -> Optional[dict[str, int]]:
+    """Pull the four canonical token counts off an AssistantMessage's
+    per-call usage dict. Returns None for non-dicts so the iteration
+    list stays clean."""
+    if not isinstance(raw, dict):
+        return None
+    return {
+        "input_tokens": int(raw.get("input_tokens") or 0),
+        "output_tokens": int(raw.get("output_tokens") or 0),
+        "cache_read_input_tokens": int(raw.get("cache_read_input_tokens") or 0),
+        "cache_creation_input_tokens": int(raw.get("cache_creation_input_tokens") or 0),
+    }
+
+
+def _anthropic_usage_to_info(
+    raw: Optional[dict],
+    iterations: Optional[list[dict[str, int]]] = None,
+) -> Optional[UsageInfo]:
+    """Convert Anthropic's ``ResultMessage.usage`` dict + per-iteration
+    usage list to :class:`UsageInfo`. Returns ``None`` if the source is
+    missing or not a dict (errors before usage was emitted).
+
+    ``iterations`` carries one normalized dict per AssistantMessage seen
+    during the agent loop — last entry ≈ the prompt size on the final
+    API call, which is the right input for context-pressure checks.
+    """
     if not raw or not isinstance(raw, dict):
         return None
     return UsageInfo(
@@ -117,6 +139,7 @@ def _anthropic_usage_to_info(raw: Optional[dict]) -> Optional[UsageInfo]:
         cache_read_input_tokens=raw.get("cache_read_input_tokens"),
         cache_creation_input_tokens=raw.get("cache_creation_input_tokens"),
         total_tokens=raw.get("total_tokens"),
+        iterations=iterations or None,
     )
 
 
@@ -179,6 +202,13 @@ class AnthropicKernel:
         cost_usd: Optional[float] = None
         is_error = False
         num_turns: Optional[int] = None
+        # Per-AssistantMessage usage. Each AssistantMessage corresponds
+        # to one internal API call inside the agent loop; the last
+        # entry's prompt size is what the next turn would build on, so
+        # downstream consumers (compaction trigger, viewer sidebar)
+        # use ``iterations[-1]`` rather than the cumulative top-level
+        # totals.
+        iter_usages: list[dict[str, int]] = []
 
         async def _drive() -> None:
             nonlocal session_id, usage_info, duration_ms, cost_usd, is_error, num_turns
@@ -188,6 +218,9 @@ class AnthropicKernel:
                         raise RuntimeError("claude rate_limit")
                     if getattr(msg, "error", None):
                         raise RuntimeError(f"claude error: {msg.error}")
+                    iter_norm = _normalize_iter_usage(getattr(msg, "usage", None))
+                    if iter_norm is not None:
+                        iter_usages.append(iter_norm)
                     for block in msg.content:
                         await self._dispatch_block(block, parts, handlers)
                 elif isinstance(msg, UserMessage):
@@ -196,7 +229,7 @@ class AnthropicKernel:
                         await h.on_user_message(msg.content)
                 elif isinstance(msg, ResultMessage):
                     session_id = msg.session_id
-                    usage_info = _anthropic_usage_to_info(msg.usage)
+                    usage_info = _anthropic_usage_to_info(msg.usage, iter_usages)
                     duration_ms = getattr(msg, "duration_ms", None)
                     cost_usd = getattr(msg, "total_cost_usd", None)
                     is_error = msg.is_error

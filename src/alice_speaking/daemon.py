@@ -669,12 +669,19 @@ class SpeakingDaemon:
         except Exception:  # noqa: BLE001
             log.exception("config reload failed; keeping current cfg")
             return
-        old_speaking = self.cfg.speaking
-        self.cfg = new_cfg
+        # Mutate cfg.speaking in place rather than rebinding self.cfg —
+        # TurnRunner and other components hold the original Config by
+        # reference (captured at startup), so a rebind would leave their
+        # ``self._cfg.speaking`` pointing at the pre-reload dict and the
+        # changed knobs (compaction threshold, etc.) would never reach
+        # the per-turn read sites.
+        old_speaking = dict(self.cfg.speaking)
+        self.cfg.speaking.clear()
+        self.cfg.speaking.update(new_cfg.speaking)
         self._config_mtime = mtime
         changes = {
             k: v
-            for k, v in new_cfg.speaking.items()
+            for k, v in self.cfg.speaking.items()
             if old_speaking.get(k) != v
         }
         log.info("config reloaded (changes: %s)", list(changes.keys()) or "none observed")

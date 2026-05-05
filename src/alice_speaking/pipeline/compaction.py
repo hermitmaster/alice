@@ -41,14 +41,23 @@ DEFAULT_THRESHOLD = 150_000
 def should_compact(
     usage: Optional[dict[str, Any]], threshold: int
 ) -> bool:
-    """Return True when the effective context size from the last turn
-    exceeds the threshold.
+    """Return True when the post-turn context size exceeds the threshold.
 
-    "Effective" = input_tokens + cache_read_input_tokens +
-    cache_creation_input_tokens. For Signal turns the SDK accumulates
-    cache_read_input_tokens across all API calls in a single query()
-    invocation; input_tokens alone is always tiny (7-23) and would
-    never cross the threshold.
+    "Post-turn context" ≈ the prompt size on the *last* internal API call
+    of the agent loop, which is what the next turn would build on. We
+    read it from ``usage["iterations"][-1]`` — that's per-call usage,
+    not the loop-cumulative top-level fields.
+
+    The top-level ``cache_read_input_tokens`` is summed across every
+    internal API call inside the loop, so a turn doing 10 tool calls
+    inflates it ~10x even when the actual prompt size on each call is
+    small. Using that as the trigger metric was the source of the
+    "compacts after every message" bug.
+
+    Falls back to the top-level fields when no iterations array is
+    present (pre-iterations event-log lines, pi backend output) — the
+    fallback over-fires the way the old code did, but it's better than
+    silently never firing.
 
     Tolerates missing / non-integer fields — a missing usage dict is
     treated as "no token pressure" (better to skip than compact on
@@ -57,6 +66,18 @@ def should_compact(
     if not usage or not isinstance(usage, dict):
         return False
     try:
+        iterations = usage.get("iterations")
+        if isinstance(iterations, list) and iterations:
+            last = iterations[-1]
+            if isinstance(last, dict):
+                effective = (
+                    int(last.get("input_tokens") or 0)
+                    + int(last.get("cache_read_input_tokens") or 0)
+                    + int(last.get("cache_creation_input_tokens") or 0)
+                )
+                return effective > threshold
+        # Fallback: cumulative top-level (over-counts on tool-heavy
+        # turns; kept only so back-compat callers don't silently no-op).
         effective = (
             int(usage.get("input_tokens") or 0)
             + int(usage.get("cache_read_input_tokens") or 0)
