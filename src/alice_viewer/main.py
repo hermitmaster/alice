@@ -605,6 +605,76 @@ def create_app(paths: Paths | None = None) -> FastAPI:
             }
         )
 
+    @app.get("/api/cluster-snapshot")
+    async def api_cluster_snapshot() -> JSONResponse:
+        """Bidirectional cluster lookup, designed for the cortex-memory/query
+        skill and Stage D pair selection. Slugs are the primary key — the
+        payload is greppable by note id without parsing.
+
+        Shape (per the agreed spec with Alice):
+
+            {
+              "generated_at": <unix-ts>,
+              "nodes":    {"<slug>": {"cluster_id", "cluster_label", "in_degree"}},
+              "clusters": {"cl-foo": {"label", "id", "size", "is_misc",
+                                       "dominant_folder", "member_slugs",
+                                       "top_hubs"}},
+              "cross_edges": {"cl-foo|cl-bar": {"weight", "weight_normalized"}}
+            }
+
+        Phase 1 omits per-cluster modularity (Phase 3) and Jaccard-tracked
+        identity drift (Phase 2). Both will be added in place without
+        breaking existing keys.
+        """
+        p: Paths = app.state.paths
+        nodes, edges = sources.read_memory_graph(p.mind_dir)
+        in_deg: dict[str, int] = {}
+        for e in edges:
+            in_deg[e.target] = in_deg.get(e.target, 0) + 1
+        cm = sources.compute_cluster_metrics(nodes, edges)
+        node_cluster = cm.get("node_cluster", {})
+        clusters = cm.get("clusters", [])
+        cross_cluster_edges = cm.get("cross_cluster_edges", [])
+
+        label_by_cid = {c["id"]: c["label"] for c in clusters}
+        clusters_out = {
+            c["label"]: {
+                "label": c["label"],
+                "id": c["id"],
+                "size": c["size"],
+                "is_misc": c["is_misc"],
+                "dominant_folder": c["dominant_folder"],
+                "member_slugs": c["member_ids"],
+                "top_hubs": c["top_hubs"],
+            }
+            for c in clusters
+        }
+        nodes_out = {
+            n.id: {
+                "cluster_id": node_cluster.get(n.id),
+                "cluster_label": label_by_cid.get(node_cluster.get(n.id)),
+                "in_degree": in_deg.get(n.id, 0),
+            }
+            for n in nodes
+        }
+        cross_out = {}
+        for e in cross_cluster_edges:
+            sl = label_by_cid.get(e["source"], e["source"])
+            tl = label_by_cid.get(e["target"], e["target"])
+            key = f"{sl}|{tl}" if sl < tl else f"{tl}|{sl}"
+            cross_out[key] = {
+                "weight": e["weight"],
+                "weight_normalized": e["weight_normalized"],
+            }
+        return JSONResponse(
+            {
+                "generated_at": time.time(),
+                "nodes": nodes_out,
+                "clusters": clusters_out,
+                "cross_edges": cross_out,
+            }
+        )
+
     @app.get("/api/interaction-graph")
     async def api_interaction_graph(window_seconds: int | None = None) -> JSONResponse:
         """Interaction graph nodes + edges.

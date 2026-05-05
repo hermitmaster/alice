@@ -17,6 +17,7 @@ single uvicorn worker).
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import re
 import time
@@ -996,7 +997,25 @@ def compute_cluster_metrics(
             return ""
         return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
 
+    # Build content-derived cluster_label v0 (top hub's label, kebab-cased,
+    # `cl-` prefixed). v0 derives on every rebuild — it's not yet stable
+    # across rebuilds (Phase 2 brings the Jaccard registry for that). When
+    # a real lobe has no in-degree at all (no bridge note), fall back to
+    # the cid string. Misc bucket has no meaningful label.
+    def _kebab(s: str) -> str:
+        out = []
+        prev_dash = False
+        for ch in s.lower():
+            if ch.isalnum():
+                out.append(ch)
+                prev_dash = False
+            elif not prev_dash:
+                out.append("-")
+                prev_dash = True
+        return "".join(out).strip("-") or "unnamed"
+
     clusters_out: list[dict[str, Any]] = []
+    cluster_label_by_cid: dict[str, str] = {}
     # Real lobes first, in size-desc order; misc bucket last (only if it exists).
     cid_order = [f"c{i}" for i in range(len(real_lps))]
     if "misc" in members_by_cid:
@@ -1010,9 +1029,17 @@ def compute_cluster_metrics(
             (nid for nid in member_ids if nid in in_deg),
             key=lambda nid: (-in_deg[nid], nid),
         )[:5]
+        if cid == "misc":
+            cluster_label = "cl-misc"
+        elif local_hubs:
+            cluster_label = "cl-" + _kebab(label_by_id.get(local_hubs[0], local_hubs[0]))
+        else:
+            cluster_label = f"cl-{cid}"
+        cluster_label_by_cid[cid] = cluster_label
         clusters_out.append(
             {
                 "id": cid,
+                "label": cluster_label,
                 "size": len(member_ids),
                 "is_misc": cid == "misc",
                 "dominant_folder": _dominant_folder(member_ids),
@@ -1030,6 +1057,10 @@ def compute_cluster_metrics(
 
     # Cross-cluster edge weights — undirected pair → count of wikilinks
     # bridging the two lobes (either direction). Self-pairs skipped.
+    # weight_normalized = weight / sqrt(|A| * |B|) — comparable across
+    # lobe-size pairs, where raw weight is not. Both are surfaced;
+    # "low coupling" only means something on the normalized form.
+    cluster_size_by_cid = {cid: len(members_by_cid.get(cid, [])) for cid in members_by_cid}
     cross_pairs: dict[tuple[str, str], int] = {}
     for s, t in topical_edges:
         cs = node_cluster.get(s)
@@ -1038,10 +1069,19 @@ def compute_cluster_metrics(
             continue
         key = (cs, ct) if cs < ct else (ct, cs)
         cross_pairs[key] = cross_pairs.get(key, 0) + 1
-    cross_edges = [
-        {"source": a, "target": b, "weight": w}
-        for (a, b), w in cross_pairs.items()
-    ]
+    cross_edges = []
+    for (a, b), w in cross_pairs.items():
+        sa = cluster_size_by_cid.get(a, 0)
+        sb = cluster_size_by_cid.get(b, 0)
+        denom = math.sqrt(sa * sb) if sa and sb else 0.0
+        cross_edges.append(
+            {
+                "source": a,
+                "target": b,
+                "weight": w,
+                "weight_normalized": round(w / denom, 4) if denom else 0.0,
+            }
+        )
 
     return {
         "modularity": round(modularity, 4),
