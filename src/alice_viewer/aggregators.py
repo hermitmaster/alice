@@ -235,6 +235,18 @@ def summarize_turn(t: Turn) -> str:
         return f"surface · {t.surface_id or '?'}"
     if t.kind == "emergency":
         return f"EMERGENCY · {t.emergency_id or '?'}"
+    if t.kind == "compaction":
+        for ev in t.events:
+            if ev.kind == "context_compaction":
+                summary_len = (ev.detail or {}).get("summary_len")
+                if summary_len:
+                    return f"context compaction · {summary_len}-char summary"
+                break
+        if t.error:
+            return f"context compaction · errored"
+        if t.end_ts is None:
+            return "context compaction · running…"
+        return "context compaction"
     return t.kind
 
 
@@ -351,6 +363,17 @@ def group_turns(events: list[UnifiedEvent]) -> list[Turn]:
         elif ev.kind == "emergency_turn_end":
             turn.end_ts = ev.ts
             turn.duration_ms = d.get("duration_ms")
+        elif ev.kind == "context_compaction_start":
+            turn.kind = "compaction"
+            turn.start_ts = ev.ts
+        elif ev.kind == "context_compaction":
+            turn.kind = "compaction"
+            turn.end_ts = ev.ts
+            turn.duration_ms = int((ev.ts - turn.start_ts) * 1000)
+        elif ev.kind == "context_compaction_error":
+            turn.kind = "compaction"
+            turn.end_ts = ev.ts
+            turn.error = d.get("error")
         elif ev.kind == "tool_use":
             name = d.get("name")
             if name and name not in turn.tools:

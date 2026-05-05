@@ -48,6 +48,10 @@ KIND_LABELS: dict[str, str] = {
     "quiet_queue_enter": "queued (quiet hours)",
     "quiet_queue_drain": "queue drained",
     "system": "system",
+    "context_compaction_start": "compaction start",
+    "context_compaction": "compaction done",
+    "context_compaction_error": "compaction error",
+    "session_roll": "session roll",
     # filesystem artifacts
     "surface_pending": "surface · pending",
     "surface_resolved": "surface · resolved",
@@ -111,11 +115,15 @@ KIND_FAMILIES: dict[str, str] = {
     "exception": "error",
     "emergency_error": "error",
     "assistant_error": "error",
+    "context_compaction_error": "error",
     # meta
     "config_reload": "meta",
     "quiet_queue_enter": "meta",
     "quiet_queue_drain": "meta",
     "system": "meta",
+    "context_compaction_start": "meta",
+    "context_compaction": "meta",
+    "session_roll": "meta",
 }
 
 

@@ -40,6 +40,10 @@ const KIND_LABELS = {
   quiet_queue_enter: 'queued (quiet hours)',
   quiet_queue_drain: 'queue drained',
   system: 'system',
+  context_compaction_start: 'compaction start',
+  context_compaction: 'compaction done',
+  context_compaction_error: 'compaction error',
+  session_roll: 'session roll',
   surface_pending: 'surface · pending',
   surface_resolved: 'surface · resolved',
   emergency_pending: 'emergency · pending',
@@ -68,7 +72,9 @@ const KIND_FAMILIES = {
   emergency_pending: 'emergency', emergency_resolved: 'emergency',
   emergency_downgraded: 'emergency', emergency_no_recipient: 'emergency',
   timeout: 'error', exception: 'error', emergency_error: 'error', assistant_error: 'error',
+  context_compaction_error: 'error',
   config_reload: 'meta', quiet_queue_enter: 'meta', quiet_queue_drain: 'meta', system: 'meta',
+  context_compaction_start: 'meta', context_compaction: 'meta', session_roll: 'meta',
 };
 
 window.humanizeKind = (k) => KIND_LABELS[k] || (k || '').replace(/_/g, ' ');

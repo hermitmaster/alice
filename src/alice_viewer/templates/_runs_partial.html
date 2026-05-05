@@ -5,7 +5,8 @@
 {% for r in runs %}
   {% set fam = 'tool' if r.kind == 'thinking-wake' else
                 ('emergency' if r.kind == 'emergency-turn' else
-                ('artifact' if r.kind == 'surface-turn' else 'turn')) %}
+                ('artifact' if r.kind == 'surface-turn' else
+                ('meta' if r.kind == 'compaction-turn' else 'turn'))) %}
   {% set status_class = 'status-' + r.status %}
   {% set short_model = r.model | replace('claude-', '') | replace('-', '.') if r.model else '' %}
   <div class="run hemi-{{ r.hemisphere }} kind-{{ r.kind }} {{ status_class }}{% if r.is_running %} running{% endif %}"
