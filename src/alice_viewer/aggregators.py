@@ -398,16 +398,23 @@ def _usage_breakdown(usage: dict[str, Any]) -> dict[str, int]:
 
 
 def _last_iteration(usage: dict[str, Any]) -> dict[str, int] | None:
-    """The trailing iteration's tokens — closest analog to `/context` after the run."""
+    """The trailing iteration's tokens — closest analog to `/context` after the run.
+
+    Pre-kernel-protocol (commit f2dc3a7) the SDK's full usage dict was passed
+    through with a per-iteration ``iterations`` array. UsageInfo flattened that
+    away, so post-f2dc3a7 we fall back to the top-level aggregate, which is the
+    same shape (input/output/cache_read/cache_creation) just summed across
+    iterations. Returns None only when both shapes are empty.
+    """
     iters = usage.get("iterations") or []
-    if not iters:
+    src = iters[-1] if iters else usage
+    if not src:
         return None
-    last = iters[-1]
     return {
-        "input": int(last.get("input_tokens") or 0),
-        "cache_creation": int(last.get("cache_creation_input_tokens") or 0),
-        "cache_read": int(last.get("cache_read_input_tokens") or 0),
-        "output": int(last.get("output_tokens") or 0),
+        "input": int(src.get("input_tokens") or 0),
+        "cache_creation": int(src.get("cache_creation_input_tokens") or 0),
+        "cache_read": int(src.get("cache_read_input_tokens") or 0),
+        "output": int(src.get("output_tokens") or 0),
     }
 
 
