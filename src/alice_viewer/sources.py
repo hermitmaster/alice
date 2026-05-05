@@ -1159,7 +1159,14 @@ class _LoadAllCache:
 _load_all_cache: _LoadAllCache | None = None
 
 
-def _load_all_signature(paths: Paths) -> tuple:
+def load_all_signature(paths: Paths) -> tuple:
+    """Cheap fingerprint of every source `load_all` reads.
+
+    The SSE change-watcher polls this on a short tick and emits a
+    ``change`` event whenever the value shifts, so live-update consumers
+    (sidebar, wakes/turns first page) only refetch when there's actually
+    something new to show.
+    """
     return (
         _file_size(paths.thinking_log),
         _file_size(paths.speaking_log),
@@ -1173,7 +1180,7 @@ def _load_all_signature(paths: Paths) -> tuple:
 
 def load_all(paths: Paths) -> list[UnifiedEvent]:
     global _load_all_cache
-    sig = _load_all_signature(paths)
+    sig = load_all_signature(paths)
     if _load_all_cache is not None and _load_all_cache.signature == sig:
         return _load_all_cache.events
 

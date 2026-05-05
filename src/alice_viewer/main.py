@@ -697,8 +697,59 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         s.pop("paths", None)
         return JSONResponse(s)
 
+    @app.get("/api/sidebar", response_class=HTMLResponse)
+    async def api_sidebar(request: Request):
+        """Sidebar partial. Re-rendered on every SSE `change` event so
+        the speaking-stats / thinking-avg / queue counters update live
+        without needing a full page reload."""
+        return templates.TemplateResponse(
+            request,
+            "_sidebar.html",
+            {"state": _state_context()},
+        )
+
     # ------------------------------------------------------------------
     # SSE live tail
+
+    @app.get("/stream/changes")
+    async def stream_changes(request: Request):
+        """Coarse change-watcher. Polls ``load_all_signature`` on a
+        short tick and emits an ``event: change`` SSE message whenever
+        the signature shifts (new log lines, new artifact files).
+
+        The signature itself is cheap (a handful of stat() calls + a
+        bounded directory walk over inner/), and the consumers downstream
+        bind ``hx-trigger="sse:change"`` to their refetch endpoints so
+        the actual rendering work only happens when there's new data.
+        Sends a periodic comment-line heartbeat so intermediate proxies
+        don't time out the connection on idle workspaces.
+        """
+        p: Paths = app.state.paths
+        last_sig = sources.load_all_signature(p)
+        # Emit one initial change so consumers can do a first refetch on
+        # connect — handy if the page was rendered slightly stale by a
+        # request that beat the latest log append. Cheap and idempotent.
+        async def gen():
+            yield {"event": "change", "data": ""}
+            ticks = 0
+            nonlocal last_sig
+            while True:
+                if await request.is_disconnected():
+                    return
+                await asyncio.sleep(2.0)
+                ticks += 1
+                try:
+                    sig = sources.load_all_signature(p)
+                except Exception:  # noqa: BLE001
+                    continue
+                if sig != last_sig:
+                    last_sig = sig
+                    yield {"event": "change", "data": ""}
+                elif ticks % 15 == 0:
+                    # ~30s heartbeat keeps long-lived proxies happy.
+                    yield {"event": "ping", "data": ""}
+
+        return EventSourceResponse(gen())
 
     @app.get("/stream")
     async def stream(request: Request):

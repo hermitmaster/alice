@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}turns{% endblock %}
 {% block body %}
-  <h1>speaking turns · {{ total_turns }}</h1>
+  <h1>speaking turns · <span id="turns-total">{{ total_turns }}</span></h1>
   <div class="table-wrap">
     <table>
       <thead>
@@ -9,7 +9,13 @@
           <th>when</th><th>kind</th><th>who/what</th><th>inbound</th><th>outbound</th><th>dur</th><th>cost</th><th>tools</th><th>turn id</th>
         </tr>
       </thead>
-      <tbody id="turns-body">
+      {# Live refresh: only swap the first page when the user is near
+         the top — otherwise infinite-scrolled history would jump. The
+         hx-trigger expression filters the SSE event in JS context. #}
+      <tbody id="turns-body"
+             hx-get="/turns/page?offset=0&limit={{ limit }}"
+             hx-trigger="sse:change[window.scrollY<200]"
+             hx-swap="innerHTML">
         {% include "_turns_partial.html" %}
       </tbody>
     </table>
