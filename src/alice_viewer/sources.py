@@ -4,7 +4,14 @@ Reads Alice's raw artifacts — JSONL event logs, the per-turn log, and
 filesystem inbox/outbox artifacts — and normalizes them into a common
 UnifiedEvent model the aggregators can reason about.
 
-All readers are stateless and file-based. No DB.
+The JSONL readers (``read_thinking`` / ``read_speaking`` / ``read_turn_log``)
+use an in-process incremental tail-parse cache: on the second call for
+the same path, only the newly-appended bytes are re-decoded. ``load_all``
+also memoizes its merged result keyed on a per-source size signature so
+back-to-back requests against unchanged logs return in microseconds
+instead of reparsing tens of megabytes of JSON. The cache is per-process
+(not threadsafe across workers), which matches how the viewer runs (a
+single uvicorn worker).
 """
 
 from __future__ import annotations
@@ -14,7 +21,7 @@ import pathlib
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from .settings import Paths
 
@@ -60,30 +67,130 @@ def _read_jsonl(path: pathlib.Path) -> Iterator[dict[str, Any]]:
         return
 
 
+# Per-process incremental cache for append-only JSONL files.
+# Each entry remembers how many bytes we've already parsed so a follow-up
+# read only decodes the tail. Rotation (size shrinks) → reparse from
+# scratch.
+@dataclass
+class _JsonlCacheEntry:
+    size: int
+    events: list[UnifiedEvent]
+    state: Any
+
+
+_jsonl_caches: dict[str, _JsonlCacheEntry] = {}
+
+
+def _iter_jsonl_tail(
+    path: pathlib.Path, start_offset: int
+) -> Iterator[tuple[dict[str, Any] | None, int]]:
+    """Yield ``(record, offset_after_line)`` for every complete line at or
+    after ``start_offset``. ``record`` is None for blank/malformed lines so
+    callers can still advance the offset cursor past them.
+
+    A trailing partial line (writer mid-flush) is left unread; the caller
+    keeps the previous offset so the next call picks it up cleanly.
+    """
+    try:
+        with path.open("rb") as f:
+            f.seek(start_offset)
+            data = f.read()
+    except OSError:
+        return
+    if not data:
+        return
+    pos = 0
+    while pos < len(data):
+        nl = data.find(b"\n", pos)
+        if nl < 0:
+            return  # partial trailing line — leave for next call
+        line_bytes = data[pos:nl]
+        new_offset = start_offset + nl + 1
+        pos = nl + 1
+        line = line_bytes.strip()
+        if not line:
+            yield None, new_offset
+            continue
+        try:
+            rec = json.loads(line.decode("utf-8", errors="replace"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            yield None, new_offset
+            continue
+        yield rec, new_offset
+
+
+def _cached_jsonl(
+    path: pathlib.Path,
+    parse_record: Callable[[dict[str, Any], Any], tuple[UnifiedEvent | None, Any]],
+    initial_state_factory: Callable[[], Any],
+) -> list[UnifiedEvent]:
+    """Tail-parse cache. ``parse_record`` is ``(rec, state) -> (event_or_None, new_state)``.
+
+    Returns the cached list directly — callers (``load_all``) consume via
+    ``list.extend`` which copies references rather than mutating, so it's
+    safe to share. Don't mutate the returned list.
+    """
+    key = str(path)
+    cached = _jsonl_caches.get(key)
+    if not path.is_file():
+        if cached is not None:
+            _jsonl_caches.pop(key, None)
+        return []
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return cached.events if cached is not None else []
+
+    if cached is None or size < cached.size:
+        cached = _JsonlCacheEntry(size=0, events=[], state=initial_state_factory())
+        _jsonl_caches[key] = cached
+
+    if size == cached.size:
+        return cached.events
+
+    state = cached.state
+    new_offset = cached.size
+    for rec, off in _iter_jsonl_tail(path, cached.size):
+        new_offset = off
+        if rec is None:
+            continue
+        event, state = parse_record(rec, state)
+        if event is not None:
+            cached.events.append(event)
+    cached.state = state
+    cached.size = new_offset
+    return cached.events
+
+
+def _parse_thinking_record(
+    rec: dict[str, Any], current_wake: str | None
+) -> tuple[UnifiedEvent | None, str | None]:
+    event = rec.get("event") or "unknown"
+    ts = float(rec.get("ts") or 0.0)
+    if event == "wake_start":
+        current_wake = f"wake-{int(ts)}"
+    correlation_id = current_wake
+    summary = _thinking_summary(event, rec)
+    out = UnifiedEvent(
+        ts=ts,
+        hemisphere="thinking",
+        kind=event,
+        correlation_id=correlation_id,
+        summary=summary,
+        detail=rec,
+    )
+    if event in ("wake_end", "timeout", "exception"):
+        current_wake = None
+    return out, current_wake
+
+
 def read_thinking(path: pathlib.Path) -> list[UnifiedEvent]:
-    """Parse thinking.log; assign wake_id = ts of the enclosing wake_start."""
-    out: list[UnifiedEvent] = []
-    current_wake: str | None = None
-    for rec in _read_jsonl(path):
-        event = rec.get("event") or "unknown"
-        ts = float(rec.get("ts") or 0.0)
-        if event == "wake_start":
-            current_wake = f"wake-{int(ts)}"
-        correlation_id = current_wake
-        summary = _thinking_summary(event, rec)
-        out.append(
-            UnifiedEvent(
-                ts=ts,
-                hemisphere="thinking",
-                kind=event,
-                correlation_id=correlation_id,
-                summary=summary,
-                detail=rec,
-            )
-        )
-        if event in ("wake_end", "timeout", "exception"):
-            current_wake = None
-    return out
+    """Parse thinking.log; assign wake_id = ts of the enclosing wake_start.
+
+    Uses the incremental tail-parse cache: subsequent calls only decode
+    bytes appended since the last call.
+    """
+    return _cached_jsonl(path, _parse_thinking_record, lambda: None)
 
 
 def _tool_summary(name: str, input_raw: Any) -> str:
@@ -257,26 +364,32 @@ def _thinking_summary(event: str, rec: dict[str, Any]) -> str:
     return event
 
 
+def _parse_speaking_record(
+    rec: dict[str, Any], _state: None
+) -> tuple[UnifiedEvent | None, None]:
+    event = rec.get("event") or "unknown"
+    ts = float(rec.get("ts") or 0.0)
+    correlation_id = rec.get("turn_id")
+    summary = _speaking_summary(event, rec)
+    return (
+        UnifiedEvent(
+            ts=ts,
+            hemisphere="speaking",
+            kind=event,
+            correlation_id=correlation_id,
+            summary=summary,
+            detail=rec,
+        ),
+        None,
+    )
+
+
 def read_speaking(path: pathlib.Path) -> list[UnifiedEvent]:
-    """Parse speaking.log; correlation_id = turn_id."""
-    out: list[UnifiedEvent] = []
-    for rec in _read_jsonl(path):
-        event = rec.get("event") or "unknown"
-        ts = float(rec.get("ts") or 0.0)
-        correlation_id = rec.get("turn_id")
-        # Collapse some event families to a stable kind for coloring.
-        summary = _speaking_summary(event, rec)
-        out.append(
-            UnifiedEvent(
-                ts=ts,
-                hemisphere="speaking",
-                kind=event,
-                correlation_id=correlation_id,
-                summary=summary,
-                detail=rec,
-            )
-        )
-    return out
+    """Parse speaking.log; correlation_id = turn_id.
+
+    Tail-parse cached.
+    """
+    return _cached_jsonl(path, _parse_speaking_record, lambda: None)
 
 
 def _speaking_summary(event: str, rec: dict[str, Any]) -> str:
@@ -333,23 +446,30 @@ def _speaking_summary(event: str, rec: dict[str, Any]) -> str:
     return event
 
 
+def _parse_turn_log_record(
+    rec: dict[str, Any], _state: None
+) -> tuple[UnifiedEvent | None, None]:
+    ts = float(rec.get("ts") or 0.0)
+    summary = f"[turn-log] {rec.get('sender_name')} → {_trim(rec.get('inbound') or '', 80)}"
+    return (
+        UnifiedEvent(
+            ts=ts,
+            hemisphere="speaking",
+            kind="turn_log",
+            correlation_id=None,
+            summary=summary,
+            detail=rec,
+        ),
+        None,
+    )
+
+
 def read_turn_log(path: pathlib.Path) -> list[UnifiedEvent]:
-    """Turn log as an event source. Useful for history before speaking.log existed."""
-    out: list[UnifiedEvent] = []
-    for rec in _read_jsonl(path):
-        ts = float(rec.get("ts") or 0.0)
-        summary = f"[turn-log] {rec.get('sender_name')} → {_trim(rec.get('inbound') or '', 80)}"
-        out.append(
-            UnifiedEvent(
-                ts=ts,
-                hemisphere="speaking",
-                kind="turn_log",
-                correlation_id=None,
-                summary=summary,
-                detail=rec,
-            )
-        )
-    return out
+    """Turn log as an event source. Useful for history before speaking.log existed.
+
+    Tail-parse cached.
+    """
+    return _cached_jsonl(path, _parse_turn_log_record, lambda: None)
 
 
 # ---------------------------------------------------------------------------
@@ -984,7 +1104,79 @@ def _parse_trailer(body: str) -> dict[str, str]:
 # Unified loader
 
 
+def _file_size(path: pathlib.Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return -1
+
+
+def _dir_signature(root: pathlib.Path) -> tuple:
+    """Cheap fingerprint of a directory tree used for cache invalidation.
+
+    Walks one level deep — enough for ``inner/{surface,emergency,notes,thoughts}``
+    layouts: each has a flat top, plus optional ``.handled``/``.consumed`` /
+    date-bucketed subdirs. We capture each visible directory's mtime + entry
+    count, which is sensitive to file creation/deletion (the only mutations
+    that happen here — files are written-once).
+    """
+    if not root.is_dir():
+        return ()
+    parts: list[tuple[str, float, int]] = []
+    try:
+        for sub in root.rglob("*"):
+            if sub.is_dir():
+                try:
+                    st = sub.stat()
+                except OSError:
+                    continue
+                try:
+                    n = sum(1 for _ in sub.iterdir())
+                except OSError:
+                    n = 0
+                parts.append((str(sub), st.st_mtime, n))
+        try:
+            st = root.stat()
+            parts.append((str(root), st.st_mtime, sum(1 for _ in root.iterdir())))
+        except OSError:
+            pass
+    except OSError:
+        return ()
+    parts.sort()
+    return tuple(parts)
+
+
+# Memoized merge of all event sources. The signature combines:
+#   - JSONL file sizes (cheap stat; tail-parse cache handles diffs internally)
+#   - Inner directory fingerprints (file-creation/deletion within the tree)
+# Hit → return the cached merged+sorted list. Miss → rebuild.
+@dataclass
+class _LoadAllCache:
+    signature: tuple
+    events: list[UnifiedEvent]
+
+
+_load_all_cache: _LoadAllCache | None = None
+
+
+def _load_all_signature(paths: Paths) -> tuple:
+    return (
+        _file_size(paths.thinking_log),
+        _file_size(paths.speaking_log),
+        _file_size(paths.turn_log),
+        _dir_signature(paths.inner / "surface"),
+        _dir_signature(paths.inner / "emergency"),
+        _dir_signature(paths.inner / "notes"),
+        _dir_signature(paths.inner / "thoughts"),
+    )
+
+
 def load_all(paths: Paths) -> list[UnifiedEvent]:
+    global _load_all_cache
+    sig = _load_all_signature(paths)
+    if _load_all_cache is not None and _load_all_cache.signature == sig:
+        return _load_all_cache.events
+
     events: list[UnifiedEvent] = []
     events.extend(read_thinking(paths.thinking_log))
     events.extend(read_speaking(paths.speaking_log))
@@ -997,6 +1189,8 @@ def load_all(paths: Paths) -> list[UnifiedEvent]:
     events.extend(read_notes(inner))
     events.extend(read_thoughts(inner))
     events.sort(key=lambda e: e.ts)
+
+    _load_all_cache = _LoadAllCache(signature=sig, events=events)
     return events
 
 
