@@ -394,14 +394,10 @@ def group_turns(events: list[UnifiedEvent]) -> list[Turn]:
             if iters:
                 turn.context_before = _iter_context(iters[0])
                 turn.context_after = _iter_context(iters[-1])
-            else:
-                # Pre-iterations event-log lines: cumulative top-level is
-                # the only signal we have. Over-counts on tool-heavy
-                # turns (cache_read sums across calls), but lets old
-                # turns still show *something* in the column.
-                fallback = _iter_context(usage)
-                turn.context_before = fallback
-                turn.context_after = fallback
+            # Without iterations the top-level cache_read is summed
+            # across the agent loop's internal API calls — using it as
+            # "context" inflates by ~Nx. Leave the column blank rather
+            # than show a misleading number.
     return sorted(by_id.values(), key=lambda t: t.start_ts)
 
 
@@ -436,15 +432,19 @@ def _usage_breakdown(usage: dict[str, Any]) -> dict[str, int]:
 def _last_iteration(usage: dict[str, Any]) -> dict[str, int] | None:
     """The trailing iteration's tokens — closest analog to `/context` after the run.
 
-    Pre-kernel-protocol (commit f2dc3a7) the SDK's full usage dict was passed
-    through with a per-iteration ``iterations`` array. UsageInfo flattened that
-    away, so post-f2dc3a7 we fall back to the top-level aggregate, which is the
-    same shape (input/output/cache_read/cache_creation) just summed across
-    iterations. Returns None only when both shapes are empty.
+    Returns None when ``usage.iterations`` is missing/empty: the top-level
+    fields are *cumulative* across every internal API call inside the agent
+    loop (cache_read sums linearly with tool-call count), so summing them
+    into a "context" total inflates the apparent prompt size by ~Nx — the
+    sidebar would read 1M+ for a normal 90K-prompt turn that did 12 tool
+    calls. Better to show no value than a misleading one; the cumulative
+    breakdown is still surfaced separately as ``totals``.
     """
     iters = usage.get("iterations") or []
-    src = iters[-1] if iters else usage
-    if not src:
+    if not iters:
+        return None
+    src = iters[-1]
+    if not isinstance(src, dict):
         return None
     return {
         "input": int(src.get("input_tokens") or 0),

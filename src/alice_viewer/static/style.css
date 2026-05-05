@@ -189,7 +189,7 @@ pre.code-block {
 /* .table-wrap keeps a wide table from pushing the page wider than the
    viewport — at narrow widths the table scrolls horizontally inside
    its own container instead of overflowing main. */
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; max-width: 100%; }
 table { border-collapse: collapse; width: 100%; font-size: 12px; }
 th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 10px; letter-spacing: 1px; }
@@ -197,7 +197,10 @@ tr:hover td { background: var(--panel-2); }
 /* break-word lets long unbreakable strings (wake_ids, turn_ids, hash
    model names) wrap inside their cell instead of expanding the column. */
 td.mono { font-family: var(--mono); color: var(--muted); font-size: 11px; word-break: break-word; overflow-wrap: anywhere; }
-td.wrap { white-space: normal; max-width: 600px; }
+/* The two prose columns (inbound/outbound) are the dominant width
+   driver. Cap each at ~300px so a 10-column table still fits a
+   typical 1280px main pane without horizontal scroll. */
+td.wrap { white-space: normal; max-width: 300px; word-break: break-word; overflow-wrap: anywhere; }
 
 /* Detail blocks */
 .detail-header { background: var(--panel); padding: 14px; border-radius: 6px; margin-bottom: 16px; }

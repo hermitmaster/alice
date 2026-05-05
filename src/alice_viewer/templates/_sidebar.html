@@ -16,6 +16,18 @@
       <div class="metric"><span class="k">cache read</span><span class="v">{{ ctx.cache_read | tokens }}</span></div>
       <div class="metric"><span class="k">output</span><span class="v">{{ ctx.output | tokens }}</span></div>
       <div class="metric"><span class="k">iterations</span><span class="v">{{ state.speaking_usage.iterations }}</span></div>
+    {% elif state.speaking_usage and state.speaking_usage.totals %}
+      {# No per-iteration breakdown on this result — daemon is on a build
+         that predates per-AssistantMessage usage capture. Show the
+         cumulative top-level totals (summed across every internal API
+         call in the agent loop) and label them honestly so the reader
+         doesn't mistake a 12x-inflated cache_read for a 1M-token prompt. #}
+      {% set t = state.speaking_usage.totals %}
+      <div class="metric muted" style="font-size:10px">cumulative totals (no per-call breakdown)</div>
+      <div class="metric"><span class="k">input</span><span class="v">{{ t.input | tokens }}</span></div>
+      <div class="metric"><span class="k">cache write</span><span class="v">{{ t.cache_creation | tokens }}</span></div>
+      <div class="metric"><span class="k">cache read Σ</span><span class="v">{{ t.cache_read | tokens }}</span></div>
+      <div class="metric"><span class="k">output</span><span class="v">{{ t.output | tokens }}</span></div>
     {% else %}
       <div class="metric muted">no result yet</div>
     {% endif %}
