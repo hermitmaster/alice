@@ -298,7 +298,32 @@ def group_wakes(events: list[UnifiedEvent]) -> list[Wake]:
         elif ev.kind == "exception":
             wake.end_ts = ev.ts
             wake.status = "exception"
-    return sorted(by_id.values(), key=lambda w: w.start_ts)
+    wakes = sorted(by_id.values(), key=lambda w: w.start_ts)
+
+    # Mark abandoned: any "running" wake that has been superseded by a
+    # later wake_start. The s6 supervisor wraps each invocation in
+    # ``flock -n`` so two wakes can never coexist — a newer start proves
+    # the older one's process is gone (audit found ~1% of historical
+    # wakes orphan because mode.post_run raised before the wake_end
+    # emit; the runtime fix is in alice_thinking/kernel_adapter.py, this
+    # is the cleanup pass for already-orphaned rows).
+    last_event_ts: dict[str, float] = {}
+    for wake in wakes:
+        if wake.events:
+            last_event_ts[wake.wake_id] = max(e.ts for e in wake.events)
+    for i, wake in enumerate(wakes[:-1]):
+        if wake.status != "running":
+            continue
+        next_start = wakes[i + 1].start_ts
+        wake.status = "abandoned"
+        # end_ts is best-known: the wake's last event (process was alive
+        # at least that long). Fall back to start_ts for the degenerate
+        # "wake_start with no other events" shape.
+        wake.end_ts = last_event_ts.get(wake.wake_id, wake.start_ts)
+        # Sanity: never claim end_ts > next wake's start_ts.
+        if wake.end_ts > next_start:
+            wake.end_ts = next_start
+    return wakes
 
 
 def group_turns(events: list[UnifiedEvent]) -> list[Turn]:

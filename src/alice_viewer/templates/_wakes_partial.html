@@ -9,6 +9,7 @@
     <td>{% if w.status == 'ended' %}<span class="muted">ended</span>
         {% elif w.status == 'timeout' %}<span style="color:var(--warn)">timeout</span>
         {% elif w.status == 'exception' %}<span style="color:var(--err)">exception</span>
+        {% elif w.status == 'abandoned' %}<span style="color:var(--warn)" title="superseded by a later wake_start — process is gone but never emitted a terminal event">abandoned</span>
         {% else %}<span style="color:var(--ok)">{{ w.status }}</span>{% endif %}</td>
     <td class="mono">{{ w.model or '—' }}</td>
     <td class="mono">{% if w.duration_ms %}{{ (w.duration_ms / 1000.0) | round(1) }}s{% else %}—{% endif %}</td>

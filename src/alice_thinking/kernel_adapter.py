@@ -75,22 +75,62 @@ async def run_wake(
         short_cap=4000,
     )
 
+    # Single try/finally envelope: every wake_start MUST be paired with
+    # a terminal event (wake_end / exception / timeout). Pre-finally
+    # this only held for the kernel.run() call — if mode.post_run raised,
+    # the asyncio coroutine bubbled the exception out without ever
+    # emitting a terminal event, leaving the wake forever "running" in
+    # the viewer (audit found ~1% orphan rate over 2300+ wakes). The
+    # ``terminated`` flag tracks whether we've already emitted one inside
+    # the try, so the finally only emits a fallback when nothing else did.
+    terminated = False
     try:
-        result = await kernel.run(prompt_text, spec)
-    except Exception as exc:  # noqa: BLE001
-        emitter.emit(
-            "exception",
-            wake_id=wake_id,
-            mode=mode.name,
-            type=type(exc).__name__,
-            message=str(exc),
-        )
-        return 1
+        try:
+            result = await kernel.run(prompt_text, spec)
+        except Exception as exc:  # noqa: BLE001
+            emitter.emit(
+                "exception",
+                wake_id=wake_id,
+                mode=mode.name,
+                phase="kernel_run",
+                type=type(exc).__name__,
+                message=str(exc),
+            )
+            terminated = True
+            return 1
 
-    if result.error == "timeout":
-        # Kernel already emitted the ``timeout`` event; surface exit code.
-        return 124
+        if result.error == "timeout":
+            # Kernel already emitted the ``timeout`` event; surface exit code.
+            terminated = True
+            return 124
 
-    await mode.post_run(ctx, result)
-    emitter.emit("wake_end", wake_id=wake_id, mode=mode.name)
-    return 0
+        try:
+            await mode.post_run(ctx, result)
+        except Exception as exc:  # noqa: BLE001
+            emitter.emit(
+                "exception",
+                wake_id=wake_id,
+                mode=mode.name,
+                phase="post_run",
+                type=type(exc).__name__,
+                message=str(exc),
+            )
+            terminated = True
+            return 1
+
+        emitter.emit("wake_end", wake_id=wake_id, mode=mode.name)
+        terminated = True
+        return 0
+    finally:
+        if not terminated:
+            # Only reachable on cancellation (SIGTERM, KeyboardInterrupt,
+            # asyncio.CancelledError) — emit so the viewer doesn't show a
+            # ghost "running" row for a dead process.
+            emitter.emit(
+                "exception",
+                wake_id=wake_id,
+                mode=mode.name,
+                phase="cancelled",
+                type="Cancelled",
+                message="wake terminated without normal exit (signal or task cancellation)",
+            )
