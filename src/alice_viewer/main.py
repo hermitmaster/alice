@@ -585,6 +585,7 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         # domains and would mask real lobe formation). See
         # sources.compute_cluster_metrics.
         cluster_metrics = sources.compute_cluster_metrics(nodes, edges)
+        node_cluster = cluster_metrics.get("node_cluster", {})
         return JSONResponse(
             {
                 "nodes": [
@@ -595,6 +596,7 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                         "size": n.size,
                         "mtime": n.mtime,
                         "in_degree": in_deg.get(n.id, 0),
+                        "cluster_id": node_cluster.get(n.id),
                     }
                     for n in nodes
                 ],

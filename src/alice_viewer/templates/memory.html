@@ -4,21 +4,30 @@
   <h1>memory graph · [[wikilinks]]</h1>
   <p class="muted">
     Every <code>*.md</code> under <code>alice-mind/memory/</code> is a node.
-    Edges are wikilinks. Node size grows with in-degree (how often the note is referenced).
-    Click a node to view its file path.
+    Edges are wikilinks. Default view groups notes into <b>lobes</b> (clusters
+    detected by label propagation); click a lobe to drill into its notes.
   </p>
 
-  <div class="flex" style="margin: 8px 0; align-items: center; gap: 12px; flex-wrap: wrap;">
+  <div class="flex" id="mode-bar" style="margin: 8px 0; align-items: center; gap: 10px; flex-wrap: wrap;">
+    <span id="breadcrumb" class="muted"></span>
+    <button id="back-to-lobes" class="mode-btn" style="display:none;">← all lobes</button>
+    <span style="flex: 1;"></span>
+    <label class="muted" style="display: inline-flex; align-items: center; gap: 6px;">
+      <input type="checkbox" id="show-all-toggle"> show all nodes (legacy)
+    </label>
+  </div>
+
+  <div class="flex node-only" style="margin: 8px 0; align-items: center; gap: 12px; flex-wrap: wrap;">
     <input type="search" id="memsearch" placeholder="search… (e.g. day night thinking)"
            style="flex: 1 1 280px; min-width: 220px; padding: 4px 8px; background: var(--panel-2);
                   color: var(--text); border: 1px solid var(--border); border-radius: 4px;
                   font: inherit;" />
-    <label class="muted"><input type="checkbox" id="show-ghosts" checked> show unresolved links</label>
+    <label class="muted"><input type="checkbox" id="show-ghosts"> show unresolved links</label>
     <span class="muted" id="search-info"></span>
     <span class="muted" id="node-count">—</span>
   </div>
 
-  <div class="flex" id="type-filter-row" style="margin: 4px 0 8px; align-items: center; gap: 6px; flex-wrap: wrap;">
+  <div class="flex node-only" id="type-filter-row" style="margin: 4px 0 8px; align-items: center; gap: 6px; flex-wrap: wrap;">
     <span class="muted" style="margin-right: 4px;">types:</span>
   </div>
 
@@ -55,6 +64,16 @@
     #cluster-metrics .cm-bad  { color: #ff6b81; }
     #cluster-metrics .cm-hubs li { color: var(--text); }
     #cluster-metrics .cm-hubs li .cm-hub-folder { color: var(--muted); margin-left: 6px; font-size: 0.92em; }
+    .mode-btn {
+      padding: 3px 10px; background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+      font: inherit; font-size: 0.9em;
+    }
+    .mode-btn:hover { background: var(--panel); }
+    .lobe-label { font-size: 12px; fill: var(--text); pointer-events: none; }
+    .lobe-sublabel { font-size: 10px; fill: var(--muted); pointer-events: none; }
+    .lobe-bubble { cursor: pointer; }
+    .lobe-bubble:hover { filter: brightness(1.15); }
   </style>
 
   <div class="graph-wrap" id="graph-wrap">
@@ -77,27 +96,19 @@
 
       const folderColor = (folder) => {
         if (folder === 'unresolved') return '#ff6b81';
-        // cortex-memory folders
-        if (folder === 'cortex-memory/people')    return '#f9c96d';  // amber — people/entities
-        if (folder === 'cortex-memory/projects')  return '#8fc7ff';  // light blue — projects
-        if (folder === 'cortex-memory/reference') return '#b8d4ff';  // blue-gray — reference docs
-        if (folder === 'cortex-memory/feedback')  return '#ffa07a';  // salmon — owner's feedback/preferences
-        if (folder === 'cortex-memory/sources')   return '#7de3c4';  // teal — external sources
-        if (folder === 'cortex-memory/conflicts') return '#ff6b81';  // red — contradictions
-        if (folder === 'cortex-memory/dailies')   return '#d4d4d4';  // light gray — chronological logs
-        if (folder === 'cortex-memory/research')  return '#a8e6cf';  // light green — investigations
-        // legacy memory/ paths (kept for backward compat)
+        if (folder === 'cortex-memory/people')    return '#f9c96d';
+        if (folder === 'cortex-memory/projects')  return '#8fc7ff';
+        if (folder === 'cortex-memory/reference') return '#b8d4ff';
+        if (folder === 'cortex-memory/feedback')  return '#ffa07a';
+        if (folder === 'cortex-memory/sources')   return '#7de3c4';
+        if (folder === 'cortex-memory/conflicts') return '#ff6b81';
+        if (folder === 'cortex-memory/dailies')   return '#d4d4d4';
+        if (folder === 'cortex-memory/research')  return '#a8e6cf';
         if (folder.startsWith('memory/sources'))  return '#7de3c4';
         if (folder.startsWith('memory/projects')) return '#8fc7ff';
-        return '#c39bff';  // default purple — operational instructions / directives
+        return '#c39bff';
       };
 
-      // Map a raw node.folder to a filter-category key. The memory/*
-      // operational dirs (root-level files and per-domain how-to-operate
-      // directories) collapse to a single 'instructions' category so the
-      // type-filter row can hide them as one. They aren't legacy — they're
-      // how-to-operate directives for Alice. Anything matching a known
-      // cortex-memory subfolder keeps its own key.
       const RECOGNIZED_CORTEX = new Set([
         'cortex-memory/people',
         'cortex-memory/projects',
@@ -111,9 +122,6 @@
       const folderCategory = (folder) => {
         if (folder === 'unresolved') return 'unresolved';
         if (RECOGNIZED_CORTEX.has(folder)) return folder;
-        // Legacy memory/sources and memory/projects fold into their cortex
-        // equivalents (already colored that way in folderColor) so the
-        // filter pill matches the visible color.
         if (folder.startsWith('memory/sources'))  return 'cortex-memory/sources';
         if (folder.startsWith('memory/projects')) return 'cortex-memory/projects';
         return 'instructions';
@@ -127,26 +135,76 @@
       const tooltip = d3.select('#tooltip');
 
       const zoomG = svg.append('g');
-      svg.call(d3.zoom().scaleExtent([0.2, 5]).on('zoom', (e) => zoomG.attr('transform', e.transform)));
+      const zoomBehavior = d3.zoom().scaleExtent([0.2, 5])
+        .on('zoom', (e) => zoomG.attr('transform', e.transform));
+      svg.call(zoomBehavior);
 
-      let nodes = data.nodes.slice();
-      let edges = data.edges.slice();
+      // Master data — never mutated by render.
+      const allNodes = data.nodes.slice();
+      const allEdges = data.edges.slice();
+      const nodeById = new Map(allNodes.map(n => [n.id, n]));
+      const clusters = (data.cluster_metrics && data.cluster_metrics.clusters) || [];
+      const crossEdges = (data.cluster_metrics && data.cluster_metrics.cross_cluster_edges) || [];
+      const clusterById = new Map(clusters.map(c => [c.id, c]));
 
-      // Search state lives outside render() so it survives ghost-toggle
-      // re-renders. matchIds = null means "no active search" (everything
-      // shown at full strength). topId = the highest-scoring match.
+      // Working set rendered in node-graph mode (changes per drill-in / all view).
+      let nodes = allNodes.slice();
+      let edges = allEdges.slice();
+
+      // Search state lives outside render so it survives ghost-toggle / mode flips.
       let matchIds = null;
       let topId = null;
-      // Refs to the live d3 selections so applySearch() can re-style after
-      // each render and after focus-mouseleave clears.
       let nodeSelRef = null;
       let linkSelRef = null;
 
-      // ---- Type-filter state ------------------------------------------
-      // Each cortex-memory folder + 'unresolved' becomes a "type" pill.
-      // hiddenTypes is the set of folder-keys that are currently filtered out.
-      // Folder keys match the node.folder string (e.g. 'cortex-memory/people'
-      // or 'unresolved' or a legacy 'memory/...' path).
+      // ---- View mode (lobes | cluster | all) ---------------------------
+      // URL params: ?view=lobes (default), ?view=cluster&cid=c0, ?view=all
+      const params = new URLSearchParams(window.location.search);
+      let viewMode = params.get('view') || 'lobes';
+      let drillCid = params.get('cid') || null;
+      if (viewMode === 'cluster' && (!drillCid || !clusterById.has(drillCid))) {
+        viewMode = 'lobes';
+        drillCid = null;
+      }
+      if (!clusters.length && viewMode === 'lobes') {
+        // Fall back to all-nodes if there's no cluster data.
+        viewMode = 'all';
+      }
+
+      const writeViewURL = () => {
+        const p = new URLSearchParams(window.location.search);
+        if (viewMode === 'lobes') { p.delete('view'); p.delete('cid'); }
+        else if (viewMode === 'cluster') { p.set('view', 'cluster'); p.set('cid', drillCid); }
+        else { p.set('view', 'all'); p.delete('cid'); }
+        const qs = p.toString();
+        history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+      };
+
+      const setNodeOnlyControls = (visible) => {
+        document.querySelectorAll('.node-only').forEach(el => {
+          el.style.display = visible ? '' : 'none';
+        });
+      };
+
+      const updateBreadcrumb = () => {
+        const bc = document.getElementById('breadcrumb');
+        const back = document.getElementById('back-to-lobes');
+        if (viewMode === 'lobes') {
+          bc.textContent = `${clusters.length} lobes · click a bubble to drill in`;
+          back.style.display = 'none';
+        } else if (viewMode === 'cluster') {
+          const c = clusterById.get(drillCid);
+          const name = c ? (c.is_misc ? 'miscellany' : (c.dominant_folder || c.id)) : drillCid;
+          bc.textContent = `lobe: ${name} · ${c ? c.size : '?'} notes`;
+          back.style.display = '';
+        } else {
+          bc.textContent = `all nodes (${allNodes.length})`;
+          back.style.display = '';
+        }
+        document.getElementById('show-all-toggle').checked = (viewMode === 'all');
+      };
+
+      // ---- Type-filter state (node-graph mode only) -------------------
       const TYPE_DEFS = [
         { key: 'cortex-memory/people',    label: 'people' },
         { key: 'cortex-memory/projects',  label: 'projects' },
@@ -159,35 +217,25 @@
         { key: 'instructions',            label: 'instructions' },
         { key: 'unresolved',              label: 'unresolved' },
       ];
-      // Map pill-label -> folder-key for URL parsing.
       const LABEL_TO_KEY = Object.fromEntries(TYPE_DEFS.map(t => [t.label, t.key]));
       const KEY_TO_LABEL = Object.fromEntries(TYPE_DEFS.map(t => [t.key, t.label]));
-
       const hiddenTypes = new Set();
-      // Parse ?hidden=feedback,dailies on load.
-      const initialHidden = new URLSearchParams(window.location.search).get('hidden');
+      const initialHidden = params.get('hidden');
       if (initialHidden) {
         for (const lab of initialHidden.split(',').map(s => s.trim()).filter(Boolean)) {
           const key = LABEL_TO_KEY[lab];
           if (key) hiddenTypes.add(key);
         }
       }
-
       const updateHiddenURL = () => {
         const labels = [...hiddenTypes].map(k => KEY_TO_LABEL[k]).filter(Boolean).sort();
-        const params = new URLSearchParams(window.location.search);
-        if (labels.length) params.set('hidden', labels.join(','));
-        else params.delete('hidden');
-        const qs = params.toString();
-        const newURL = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
-        history.replaceState(null, '', newURL);
+        const p = new URLSearchParams(window.location.search);
+        if (labels.length) p.set('hidden', labels.join(','));
+        else p.delete('hidden');
+        history.replaceState(null, '', window.location.pathname + (p.toString() ? '?' + p.toString() : '') + window.location.hash);
       };
-
-      // Build pills from node data. Counts are computed over ALL nodes
-      // (not currently-rendered ones) so toggling pills doesn't shift counts.
       const buildPills = () => {
         const row = document.getElementById('type-filter-row');
-        // Strip everything after the leading "types:" label.
         while (row.children.length > 1) row.removeChild(row.lastChild);
         const counts = {};
         for (const n of nodes) {
@@ -196,7 +244,7 @@
         }
         for (const def of TYPE_DEFS) {
           const c = counts[def.key] || 0;
-          if (c === 0 && def.key !== 'unresolved') continue;  // skip empty cortex types
+          if (c === 0 && def.key !== 'unresolved') continue;
           const pill = document.createElement('span');
           pill.className = 'type-pill' + (hiddenTypes.has(def.key) ? ' filtered' : '');
           pill.dataset.typeKey = def.key;
@@ -209,7 +257,7 @@
             else hiddenTypes.add(def.key);
             pill.classList.toggle('filtered');
             updateHiddenURL();
-            render();
+            renderNodeGraph();
           });
           row.appendChild(pill);
         }
@@ -237,9 +285,9 @@
         }
       };
 
-      const render = () => {
+      // ---- Node-graph renderer (used by all-view + cluster drill-in) --
+      const renderNodeGraph = () => {
         zoomG.selectAll('*').remove();
-
         const showGhosts = document.getElementById('show-ghosts').checked;
         const activeNodes = nodes.filter(n => {
           if (!showGhosts && n.folder === 'unresolved') return false;
@@ -247,13 +295,10 @@
           return true;
         });
         const activeIds = new Set(activeNodes.map(n => n.id));
-        const activeEdges = edges.filter(e => activeIds.has(e.source.id || e.source) && activeIds.has(e.target.id || e.target));
+        const activeEdges = edges.filter(e =>
+          activeIds.has(e.source.id || e.source) && activeIds.has(e.target.id || e.target));
 
         const sim = d3.forceSimulation(activeNodes)
-          // Loosened so dense clusters spread out and read well at zoom 1.
-          // distance: how far links want to be (was 60). strength: how
-          // hard they pull (was 0.3). charge: pairwise repulsion (was
-          // -180, more negative = stronger push).
           .force('link', d3.forceLink(activeEdges).id(d => d.id).distance(140).strength(0.08))
           .force('charge', d3.forceManyBody().strength(-650))
           .force('center', d3.forceCenter(width / 2, height / 2))
@@ -298,9 +343,6 @@
         try { window.attachGraphFocus({ nodeSel, linkSel: link, edges: activeEdges }); }
         catch (err) { console.error('attachGraphFocus failed', err); }
 
-        // Expose live selections for the search overlay, then re-apply
-        // current search state after this render. The .search namespace
-        // re-applies search-dim after focus's mouseleave clears styles.
         nodeSelRef = nodeSel;
         linkSelRef = link;
         nodeSel.on('mouseleave.search', applySearch);
@@ -319,20 +361,152 @@
         } catch (err) { console.error('attachGraphTuning failed', err); }
       };
 
+      // ---- Lobe overview renderer -------------------------------------
+      const renderLobeOverview = () => {
+        zoomG.selectAll('*').remove();
+        nodeSelRef = null;
+        linkSelRef = null;
+
+        if (!clusters.length) {
+          zoomG.append('text')
+            .attr('x', width / 2).attr('y', height / 2)
+            .attr('text-anchor', 'middle').attr('fill', 'var(--muted)')
+            .text('No clusters detected. Try the legacy view.');
+          return;
+        }
+
+        // Bubble nodes: one per cluster. Radius = sqrt(size) * scale.
+        const bubbles = clusters.map(c => ({
+          id: c.id,
+          size: c.size,
+          is_misc: !!c.is_misc,
+          folder: c.dominant_folder,
+          top_hubs: c.top_hubs || [],
+          // r tuned for ~10 lobes in a typical viewport.
+          r: Math.max(18, 6 * Math.sqrt(c.size)),
+        }));
+        const links = crossEdges.map(e => Object.assign({}, e));
+
+        const sim = d3.forceSimulation(bubbles)
+          .force('link', d3.forceLink(links).id(d => d.id)
+            .distance(d => 90 + 200 / (1 + d.weight))
+            .strength(d => Math.min(0.6, 0.05 + d.weight * 0.04)))
+          .force('charge', d3.forceManyBody().strength(d => -90 - d.r * 6))
+          .force('center', d3.forceCenter(width / 2, height / 2))
+          .force('collide', d3.forceCollide(d => d.r + 6).strength(0.9));
+
+        const maxW = Math.max(1, d3.max(links, l => l.weight) || 1);
+        const link = zoomG.append('g')
+          .attr('stroke', '#3b4660').attr('stroke-opacity', 0.55)
+          .selectAll('line').data(links).join('line')
+            .attr('stroke-width', l => 0.6 + 3.2 * (l.weight / maxW));
+
+        const node = zoomG.append('g').selectAll('g').data(bubbles).join('g')
+          .attr('class', 'lobe-bubble')
+          .call(d3.drag()
+            .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+            .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+            .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+        node.append('circle')
+          .attr('r', d => d.r)
+          .attr('fill', d => d.is_misc ? '#5a606b' : folderColor(d.folder))
+          .attr('fill-opacity', d => d.is_misc ? 0.4 : 0.78)
+          .attr('stroke', '#0d1015').attr('stroke-width', 2);
+
+        // Primary label: dominant folder name (or "miscellany"); secondary
+        // line: count + top-hub hint. Both centered inside the bubble.
+        node.append('text')
+          .attr('class', 'lobe-label')
+          .attr('text-anchor', 'middle')
+          .attr('dy', '-0.2em')
+          .text(d => {
+            if (d.is_misc) return 'miscellany';
+            const f = d.folder || d.id;
+            return f.startsWith('cortex-memory/') ? f.slice('cortex-memory/'.length) : f;
+          });
+        node.append('text')
+          .attr('class', 'lobe-sublabel')
+          .attr('text-anchor', 'middle')
+          .attr('dy', '1em')
+          .text(d => {
+            const hub = d.top_hubs[0];
+            return hub ? `${d.size} · ${hub.label}` : `${d.size}`;
+          });
+
+        node.on('mouseenter', (e, d) => {
+          const hubLines = d.top_hubs.slice(0, 5)
+            .map(h => `&nbsp;· ${h.label} <span style="color:#79849a">(in ${h.in_degree})</span>`)
+            .join('<br>');
+          tooltip.style('display', 'block')
+            .html(`<b>${d.is_misc ? 'miscellany' : (d.folder || d.id)}</b><br>` +
+                  `<span style="color:#79849a">${d.size} notes${d.is_misc ? ' (singletons)' : ''}</span><br>` +
+                  (hubLines ? `<span style="color:#79849a">top hubs:</span><br>${hubLines}<br>` : '') +
+                  `<span style="color:#79849a">click to drill in</span>`)
+            .style('left', (e.pageX + 12) + 'px').style('top', (e.pageY + 12) + 'px');
+        }).on('mousemove', (e) => tooltip.style('left', (e.pageX + 12) + 'px').style('top', (e.pageY + 12) + 'px'))
+          .on('mouseleave', () => tooltip.style('display', 'none'))
+          .on('click', (e, d) => {
+            tooltip.style('display', 'none');
+            drillIntoCluster(d.id);
+          });
+
+        sim.on('tick', () => {
+          link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+              .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+          node.attr('transform', d => `translate(${d.x},${d.y})`);
+        });
+      };
+
+      // ---- Mode switching ---------------------------------------------
+      const drillIntoCluster = (cid) => {
+        const c = clusterById.get(cid);
+        if (!c) return;
+        const memberSet = new Set(c.member_ids);
+        nodes = allNodes.filter(n => memberSet.has(n.id));
+        edges = allEdges.filter(e =>
+          memberSet.has(e.source.id || e.source) && memberSet.has(e.target.id || e.target));
+        viewMode = 'cluster';
+        drillCid = cid;
+        writeViewURL();
+        updateBreadcrumb();
+        setNodeOnlyControls(true);
+        buildPills();
+        // Reset zoom/pan since we're swapping the visible content entirely.
+        svg.transition().duration(0).call(zoomBehavior.transform, d3.zoomIdentity);
+        renderNodeGraph();
+      };
+
+      const showAll = () => {
+        nodes = allNodes.slice();
+        edges = allEdges.slice();
+        viewMode = 'all';
+        drillCid = null;
+        writeViewURL();
+        updateBreadcrumb();
+        setNodeOnlyControls(true);
+        buildPills();
+        svg.transition().duration(0).call(zoomBehavior.transform, d3.zoomIdentity);
+        renderNodeGraph();
+      };
+
+      const showLobes = () => {
+        viewMode = 'lobes';
+        drillCid = null;
+        writeViewURL();
+        updateBreadcrumb();
+        setNodeOnlyControls(false);
+        svg.transition().duration(0).call(zoomBehavior.transform, d3.zoomIdentity);
+        renderLobeOverview();
+      };
+
       // ---- Cluster metrics readout ------------------------------------
-      // Populated once per page load from the /api/memory-graph response.
-      // Computed server-side over the topical subgraph (dailies + instructions
-      // + unresolved excluded — they bridge across domains and would mask
-      // real lobe formation).
       const renderClusterMetrics = (cm) => {
         if (!cm) return;
         const wrap = document.getElementById('cluster-metrics');
         const strip = wrap.querySelector('.cm-strip');
         const hubsList = wrap.querySelector('.cm-hubs');
         const summary = document.getElementById('cm-hubs-summary');
-        // Modularity bands: >0.3 healthy lobes, 0.1–0.3 weak structure,
-        // <0.1 hairball. Lobe coverage bands: >=0.7 most nodes in real
-        // lobes, 0.4–0.7 partial, <0.4 mostly singletons.
         const modCls = cm.modularity >= 0.3 ? 'cm-good'
                      : cm.modularity >= 0.1 ? 'cm-warn' : 'cm-bad';
         const covCls = cm.lobe_coverage >= 0.7 ? 'cm-good'
@@ -355,7 +529,7 @@
         hubsList.querySelectorAll('.cm-hub-link').forEach(a => {
           a.addEventListener('click', (ev) => {
             ev.preventDefault();
-            const node = nodes.find(n => n.id === a.dataset.id);
+            const node = allNodes.find(n => n.id === a.dataset.id);
             if (node) window.openMemoryNodeModal(node);
           });
         });
@@ -363,11 +537,15 @@
       };
       renderClusterMetrics(data.cluster_metrics);
 
-      buildPills();
-      render();
-      document.getElementById('show-ghosts').addEventListener('change', render);
+      // ---- Wire controls ----------------------------------------------
+      document.getElementById('back-to-lobes').addEventListener('click', showLobes);
+      document.getElementById('show-all-toggle').addEventListener('change', (e) => {
+        if (e.target.checked) showAll();
+        else showLobes();
+      });
+      document.getElementById('show-ghosts').addEventListener('change', renderNodeGraph);
 
-      // ---- Search wiring -----------------------------------------------
+      // ---- Search wiring (node-graph mode only) -----------------------
       const searchInput = document.getElementById('memsearch');
       const searchInfo = document.getElementById('search-info');
       let searchTimer = null;
@@ -384,9 +562,9 @@
           return;
         }
         try {
-          const res = await fetch('/api/memory/search?q=' + encodeURIComponent(trimmed));
-          const data = await res.json();
-          lastResults = data.results || [];
+          const r = await fetch('/api/memory/search?q=' + encodeURIComponent(trimmed));
+          const d = await r.json();
+          lastResults = d.results || [];
           matchIds = new Set(lastResults.map(r => r.id));
           topId = lastResults.length ? lastResults[0].id : null;
           searchInfo.textContent = lastResults.length
@@ -403,7 +581,6 @@
         clearTimeout(searchTimer);
         searchTimer = setTimeout(() => runSearch(searchInput.value), 150);
       });
-
       searchInput.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           e.preventDefault();
@@ -413,10 +590,19 @@
         } else if (e.key === 'Enter' && lastResults.length) {
           e.preventDefault();
           const top = lastResults[0];
-          const node = nodes.find(n => n.id === top.id);
+          const node = allNodes.find(n => n.id === top.id);
           if (node) window.openMemoryNodeModal(node);
         }
       });
+
+      // ---- Initial render ---------------------------------------------
+      if (viewMode === 'cluster' && drillCid) {
+        drillIntoCluster(drillCid);
+      } else if (viewMode === 'all') {
+        showAll();
+      } else {
+        showLobes();
+      }
     })();
   </script>
 {% endblock %}

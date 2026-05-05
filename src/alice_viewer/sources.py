@@ -963,6 +963,86 @@ def compute_cluster_metrics(
         for nid in hub_ids
     ]
 
+    # ---- Per-cluster membership for the lobe view --------------------
+    # Bucket label-propagation results into stable cluster IDs ("c0",
+    # "c1", ...) ordered by size descending. Anything below min_lobe_size
+    # collapses into a single "misc" lobe so the overview isn't drowned
+    # in singletons. Cross-cluster edges are aggregated into weighted
+    # pairs for the inter-bubble layer.
+    members_by_lp: dict[str, list[str]] = {}
+    for nid, lp in labels.items():
+        members_by_lp.setdefault(lp, []).append(nid)
+
+    real_lps = sorted(
+        (lp for lp, mem in members_by_lp.items() if len(mem) >= min_lobe_size),
+        key=lambda lp: (-len(members_by_lp[lp]), lp),
+    )
+    misc_lps = [lp for lp in members_by_lp if lp not in set(real_lps)]
+    lp_to_cid: dict[str, str] = {lp: f"c{i}" for i, lp in enumerate(real_lps)}
+    for lp in misc_lps:
+        lp_to_cid[lp] = "misc"
+    node_cluster: dict[str, str] = {nid: lp_to_cid[lp] for nid, lp in labels.items()}
+
+    members_by_cid: dict[str, list[str]] = {}
+    for nid, cid in node_cluster.items():
+        members_by_cid.setdefault(cid, []).append(nid)
+
+    def _dominant_folder(member_ids: list[str]) -> str:
+        counts: dict[str, int] = {}
+        for nid in member_ids:
+            f = folder_by_id.get(nid, "")
+            counts[f] = counts.get(f, 0) + 1
+        if not counts:
+            return ""
+        return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+    clusters_out: list[dict[str, Any]] = []
+    # Real lobes first, in size-desc order; misc bucket last (only if it exists).
+    cid_order = [f"c{i}" for i in range(len(real_lps))]
+    if "misc" in members_by_cid:
+        cid_order.append("misc")
+    for cid in cid_order:
+        member_ids = members_by_cid.get(cid, [])
+        if not member_ids:
+            continue
+        # Per-cluster top hubs by in-degree (within topical subgraph).
+        local_hubs = sorted(
+            (nid for nid in member_ids if nid in in_deg),
+            key=lambda nid: (-in_deg[nid], nid),
+        )[:5]
+        clusters_out.append(
+            {
+                "id": cid,
+                "size": len(member_ids),
+                "is_misc": cid == "misc",
+                "dominant_folder": _dominant_folder(member_ids),
+                "member_ids": member_ids,
+                "top_hubs": [
+                    {
+                        "id": nid,
+                        "label": label_by_id.get(nid, nid),
+                        "in_degree": in_deg.get(nid, 0),
+                    }
+                    for nid in local_hubs
+                ],
+            }
+        )
+
+    # Cross-cluster edge weights — undirected pair → count of wikilinks
+    # bridging the two lobes (either direction). Self-pairs skipped.
+    cross_pairs: dict[tuple[str, str], int] = {}
+    for s, t in topical_edges:
+        cs = node_cluster.get(s)
+        ct = node_cluster.get(t)
+        if not cs or not ct or cs == ct:
+            continue
+        key = (cs, ct) if cs < ct else (ct, cs)
+        cross_pairs[key] = cross_pairs.get(key, 0) + 1
+    cross_edges = [
+        {"source": a, "target": b, "weight": w}
+        for (a, b), w in cross_pairs.items()
+    ]
+
     return {
         "modularity": round(modularity, 4),
         "cluster_count": cluster_count,
@@ -970,6 +1050,9 @@ def compute_cluster_metrics(
         "lobe_coverage": round(lobe_coverage, 4),
         "topical_node_count": len(topical_ids),
         "topical_edge_count": m,
+        "clusters": clusters_out,
+        "cross_cluster_edges": cross_edges,
+        "node_cluster": node_cluster,
     }
 
 
