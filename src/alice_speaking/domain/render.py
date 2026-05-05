@@ -54,9 +54,7 @@ def capability_prompt_fragment(transport_name: str, caps: Capabilities) -> str:
     """
     from alice_prompts import load as load_prompt
 
-    return load_prompt(
-        f"speaking.capability.{transport_name}", caps=caps
-    ).rstrip()
+    return load_prompt(f"speaking.capability.{transport_name}", caps=caps).rstrip()
 
 
 # ---------------------------------------------------------------------------

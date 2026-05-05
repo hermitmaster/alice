@@ -54,9 +54,7 @@ def test_render_with_yaml_context(capsys, tmp_path: pathlib.Path):
     via a YAML context file. The override should reach the
     template through the loader's per-call context."""
     ctx_file = tmp_path / "ctx.yaml"
-    ctx_file.write_text(
-        "agent:\n  name: Bob\nuser:\n  name: Alice's Owner\n"
-    )
+    ctx_file.write_text("agent:\n  name: Bob\nuser:\n  name: Alice's Owner\n")
 
     rc = cli.main(
         [
@@ -78,9 +76,7 @@ def test_render_with_yaml_context(capsys, tmp_path: pathlib.Path):
 def test_render_with_json_context(capsys, tmp_path: pathlib.Path):
     """Same shape with a JSON context file."""
     ctx_file = tmp_path / "ctx.json"
-    ctx_file.write_text(
-        json.dumps({"caps": {"max_message_bytes": 999}})
-    )
+    ctx_file.write_text(json.dumps({"caps": {"max_message_bytes": 999}}))
 
     rc = cli.main(
         [

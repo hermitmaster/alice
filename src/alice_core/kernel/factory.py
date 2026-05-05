@@ -78,6 +78,7 @@ def make_kernel(
             short_cap=short_cap,
         )
     from .anthropic import AnthropicKernel
+
     return AnthropicKernel(
         emitter,
         correlation_id=correlation_id,

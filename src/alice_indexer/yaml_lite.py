@@ -104,7 +104,9 @@ def _parse_scalar(raw: str) -> Any:
         parts = _split_flow(inner)
         return [_unquote(p.strip()) for p in parts]
     # quoted scalar
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+    if (s.startswith('"') and s.endswith('"')) or (
+        s.startswith("'") and s.endswith("'")
+    ):
         return s[1:-1]
     # int
     if re.fullmatch(r"-?\d+", s):
@@ -122,7 +124,9 @@ def _parse_scalar(raw: str) -> Any:
 
 def _unquote(s: str) -> str:
     s = s.strip()
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+    if (s.startswith('"') and s.endswith('"')) or (
+        s.startswith("'") and s.endswith("'")
+    ):
         return s[1:-1]
     # Obsidian-style wikilink in a list item: [[target]] or "[[target]]"
     return s

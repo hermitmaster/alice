@@ -46,7 +46,9 @@ def test_load_minimal_config(tmp_path: pathlib.Path) -> None:
     )
     cfg = load(tmp_path)
     assert cfg.speaking == BackendSpec(backend="subscription", model="claude-opus-4-7")
-    assert cfg.thinking == BackendSpec(backend="subscription", model="claude-sonnet-4-6")
+    assert cfg.thinking == BackendSpec(
+        backend="subscription", model="claude-sonnet-4-6"
+    )
     # Viewer absent → defaults to subscription with no model override.
     assert cfg.viewer.backend == "subscription"
     assert cfg.viewer.model == ""

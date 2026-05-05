@@ -80,6 +80,7 @@ class FakeSignal:
         async def _empty():
             if False:
                 yield  # type: ignore[unreachable]
+
         return _empty()
 
 
@@ -178,9 +179,7 @@ def test_run_turn_persists_session_id(cfg, monkeypatch) -> None:
 
     _patch_query(monkeypatch, msgs)
 
-    asyncio.run(
-        d._run_turn("hello", turn_id="t1", outbound_recipient="+15555550100")
-    )
+    asyncio.run(d._run_turn("hello", turn_id="t1", outbound_recipient="+15555550100"))
 
     assert d.session_id == "fresh-789"
     persisted = session_state.read(d._session_path)
@@ -199,9 +198,7 @@ def test_run_turn_fires_missed_reply_when_no_send(cfg, monkeypatch, tmp_path) ->
 
     _patch_query(monkeypatch, msgs)
     asyncio.run(
-        d._run_turn(
-            "hi", turn_id="t-missed", outbound_recipient="+15555550100"
-        )
+        d._run_turn("hi", turn_id="t-missed", outbound_recipient="+15555550100")
     )
 
     # Event log should contain a missed_reply record.
@@ -234,9 +231,7 @@ def test_send_message_suppresses_missed_reply(cfg, monkeypatch) -> None:
         # Manually invoke the sender as the tool handler would.
         await d._send_message(owner, "hello owner")
         # Then run the "turn" which checks the flag.
-        await d._run_turn(
-            "unused", turn_id="t-sent", outbound_recipient="+15555550100"
-        )
+        await d._run_turn("unused", turn_id="t-sent", outbound_recipient="+15555550100")
         return d._turn_did_send
 
     # We can't easily assert the flag after _run_turn because _run_turn
@@ -277,7 +272,9 @@ def test_signal_send_event_has_unified_shape(cfg, monkeypatch) -> None:
         await d._send_message(owner, "hi")
 
     asyncio.run(go())
-    events = [e for e in _read_events(cfg.event_log_path) if e["event"] == "signal_send"]
+    events = [
+        e for e in _read_events(cfg.event_log_path) if e["event"] == "signal_send"
+    ]
     assert len(events) == 1
     e = events[0]
     for key in (
@@ -307,6 +304,7 @@ def test_discord_surface_send_routes_through_quiet_queue(cfg, monkeypatch) -> No
     # resolve to the stub. (Phase 6a of plan 01 split the dispatch
     # path; patching daemon alone no longer reaches the router.)
     from alice_speaking.pipeline import outbox as outbox_module
+
     monkeypatch.setattr(daemon_module, "is_quiet_hours", lambda *_a, **_k: True)
     monkeypatch.setattr(outbox_module, "is_quiet_hours", lambda *_a, **_k: True)
     d.discord_transport = object()  # truthy stand-in; we won't reach .send()
@@ -340,9 +338,7 @@ def test_token_threshold_arms_compaction(cfg, monkeypatch) -> None:
 
     _patch_query(monkeypatch, msgs)
 
-    asyncio.run(
-        d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100")
-    )
+    asyncio.run(d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100"))
     # Phase 6b of plan 01: pending state lives on the trigger.
     assert d.compaction.pending() is True
 
@@ -385,9 +381,7 @@ def test_layer2_bootstrap_preamble_primed_from_turn_log(cfg, monkeypatch) -> Non
     from alice_speaking.domain.turn_log import new_turn
 
     d.turns.append(new_turn("+15555550100", "Owner", "morning", "hey owner"))
-    d.turns.append(
-        new_turn("+15555550100", "Owner", "how you doing", "doing fine")
-    )
+    d.turns.append(new_turn("+15555550100", "Owner", "how you doing", "doing fine"))
 
     assert d.session_id is None
     d._prime_bootstrap_preamble()
@@ -449,9 +443,7 @@ def test_resume_failure_clears_and_retries(cfg, monkeypatch) -> None:
         lambda **kw: first_call_fails_then_succeeds(**kw),
     )
 
-    asyncio.run(
-        d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100")
-    )
+    asyncio.run(d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100"))
 
     # Retry happened; fresh session persisted.
     assert len(calls) == 2
@@ -486,12 +478,12 @@ def test_resume_failure_does_not_loop_on_retry(cfg, monkeypatch) -> None:
         raise SessionNotFoundError("Session not found")
         yield  # pragma: no cover
 
-    monkeypatch.setattr("alice_core.kernel.anthropic.query", lambda **kw: always_fails(**kw))
+    monkeypatch.setattr(
+        "alice_core.kernel.anthropic.query", lambda **kw: always_fails(**kw)
+    )
 
     with pytest.raises(SessionNotFoundError):
-        asyncio.run(
-            d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100")
-        )
+        asyncio.run(d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100"))
 
     # Exactly two calls — one initial + one retry.
     assert len(calls) == 2
@@ -514,7 +506,9 @@ def test_preamble_consumed_on_next_turn(cfg, monkeypatch) -> None:
         for m in msgs():
             yield m
 
-    monkeypatch.setattr("alice_core.kernel.anthropic.query", lambda **kw: fake_query(**kw))
+    monkeypatch.setattr(
+        "alice_core.kernel.anthropic.query", lambda **kw: fake_query(**kw)
+    )
 
     asyncio.run(
         d._run_turn("real body", turn_id="t1", outbound_recipient="+15555550100")
@@ -549,16 +543,14 @@ def test_kernel_spec_model_from_model_yml(cfg, monkeypatch, tmp_path) -> None:
         ):
             yield m
 
-    monkeypatch.setattr("alice_core.kernel.anthropic.query", lambda **kw: capturing_query(**kw))
-    asyncio.run(
-        d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100")
+    monkeypatch.setattr(
+        "alice_core.kernel.anthropic.query", lambda **kw: capturing_query(**kw)
     )
+    asyncio.run(d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100"))
     assert captured["options"].model == "claude-from-yml"
 
 
-def test_falls_back_to_alice_config_when_model_yml_absent(
-    cfg, monkeypatch
-) -> None:
+def test_falls_back_to_alice_config_when_model_yml_absent(cfg, monkeypatch) -> None:
     """No ``model.yml`` → daemon falls back to ``alice.config.json``'s
     ``speaking.model`` (today's behaviour)."""
     d = _make_daemon(cfg, monkeypatch)
@@ -593,11 +585,11 @@ def test_kernel_spec_includes_personae_system_prompt(cfg, monkeypatch) -> None:
         ):
             yield m
 
-    monkeypatch.setattr("alice_core.kernel.anthropic.query", lambda **kw: capturing_query(**kw))
-
-    asyncio.run(
-        d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100")
+    monkeypatch.setattr(
+        "alice_core.kernel.anthropic.query", lambda **kw: capturing_query(**kw)
     )
+
+    asyncio.run(d._run_turn("hi", turn_id="t1", outbound_recipient="+15555550100"))
 
     sp = captured["options"].system_prompt
     # The kernel wraps our string in the SDK's append-preset shape.

@@ -38,9 +38,7 @@ def _stamp_utc() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M%S")
 
 
-def build(
-    cfg: Config, *, personae: Personae | None = None
-) -> list[SdkMcpTool[Any]]:
+def build(cfg: Config, *, personae: Personae | None = None) -> list[SdkMcpTool[Any]]:
     p = personae or placeholder_personae()
     agent = p.agent.name
     inner_dir = cfg.mind_dir / "inner"
@@ -115,13 +113,19 @@ def build(
         if not notes_dir.is_dir():
             return _ok("(no notes/ dir)")
         entries = sorted(
-            (p for p in notes_dir.glob("*.md") if since is None or p.stat().st_mtime >= since),
+            (
+                p
+                for p in notes_dir.glob("*.md")
+                if since is None or p.stat().st_mtime >= since
+            ),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )[:limit]
         if not entries:
             return _ok("(no notes)")
-        lines = [f"{p.relative_to(cfg.mind_dir)}: {_first_nonempty(p)}" for p in entries]
+        lines = [
+            f"{p.relative_to(cfg.mind_dir)}: {_first_nonempty(p)}" for p in entries
+        ]
         return _ok("\n".join(lines))
 
     @tool(
@@ -147,7 +151,9 @@ def build(
         entries = entries[:limit]
         if not entries:
             return _ok("(no thoughts match)")
-        lines = [f"{p.relative_to(cfg.mind_dir)}: {_first_nonempty(p)}" for p in entries]
+        lines = [
+            f"{p.relative_to(cfg.mind_dir)}: {_first_nonempty(p)}" for p in entries
+        ]
         return _ok("\n".join(lines))
 
     @tool(

@@ -130,9 +130,7 @@ def _render_skill_md(skill: Skill, personae: Optional[Any]) -> str:
     if personae is not None and "{{" in body:
         import jinja2
 
-        env = jinja2.Environment(
-            autoescape=False, undefined=jinja2.StrictUndefined
-        )
+        env = jinja2.Environment(autoescape=False, undefined=jinja2.StrictUndefined)
         body = env.from_string(body).render(**personae.as_template_context())
 
     yaml_text = _yaml.dump(

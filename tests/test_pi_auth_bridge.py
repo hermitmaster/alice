@@ -106,9 +106,7 @@ def test_bridge_preserves_existing_non_codex_entries(tmp_path) -> None:
         json.dumps({"anthropic": {"type": "api_key", "key": "sk-ant-keepme"}})
     )
 
-    access = _make_jwt(
-        account_id="acct-1", exp_sec=int(time.time()) + 86400
-    )
+    access = _make_jwt(account_id="acct-1", exp_sec=int(time.time()) + 86400)
     codex_path.write_text(
         json.dumps(
             {
@@ -158,9 +156,7 @@ def test_bridge_exits_nonzero_on_token_without_account_id(tmp_path) -> None:
     )
     bad_token = f"{header}.{payload}.sig"
     codex_path.write_text(
-        json.dumps(
-            {"tokens": {"access_token": bad_token, "refresh_token": "rt"}}
-        )
+        json.dumps({"tokens": {"access_token": bad_token, "refresh_token": "rt"}})
     )
 
     rc, stderr = _run_bridge(codex_path=codex_path, pi_path=pi_path)

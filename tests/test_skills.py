@@ -156,12 +156,8 @@ def test_registry_resolves_override_from_mind_over_default(
     """A skill present in both paths → mind wins."""
     mind = tmp_path / "mind"
     runtime = tmp_path / "runtime"
-    _write_skill(
-        mind, "log-journal", description="Mind override for log-journal."
-    )
-    _write_skill(
-        runtime, "log-journal", description="Runtime default for log-journal."
-    )
+    _write_skill(mind, "log-journal", description="Mind override for log-journal.")
+    _write_skill(runtime, "log-journal", description="Runtime default for log-journal.")
     reg = SkillRegistry.from_search_paths([mind, runtime])
     assert reg.find("log-journal").description.startswith("Mind override")
 

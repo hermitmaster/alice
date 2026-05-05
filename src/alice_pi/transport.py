@@ -82,6 +82,4 @@ async def stream_pi_events(
         if rc != 0:
             stderr_bytes = await proc.stderr.read()
             stderr = stderr_bytes.decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"pi exited {rc}: {stderr[:1000]}"
-            )
+            raise RuntimeError(f"pi exited {rc}: {stderr[:1000]}")

@@ -30,10 +30,10 @@ from .settings import Paths
 @dataclass
 class UnifiedEvent:
     ts: float
-    hemisphere: str            # "thinking" | "speaking" | "inner"
-    kind: str                  # canonical event type, e.g. "tool_use"
-    correlation_id: str | None # turn_id | wake_id | surface_id | etc.
-    summary: str               # one-line label for the timeline row
+    hemisphere: str  # "thinking" | "speaking" | "inner"
+    kind: str  # canonical event type, e.g. "tool_use"
+    correlation_id: str | None  # turn_id | wake_id | surface_id | etc.
+    summary: str  # one-line label for the timeline row
     detail: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -207,7 +207,15 @@ def _tool_summary(name: str, input_raw: Any) -> str:
         except (json.JSONDecodeError, ValueError):
             # Daemon truncates large inputs at 2000 chars → JSON often invalid.
             # Fall back to regex-plucking the most useful field.
-            for field in ("file_path", "command", "pattern", "url", "query", "notebook_path", "description"):
+            for field in (
+                "file_path",
+                "command",
+                "pattern",
+                "url",
+                "query",
+                "notebook_path",
+                "description",
+            ):
                 m = re.search(rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)"', input_raw)
                 if m:
                     val = m.group(1).encode().decode("unicode_escape", errors="replace")
@@ -315,9 +323,7 @@ def _unescape(s: str) -> str:
     escaping (``\\\\t`` → ``\\t`` → tab)."""
     for _ in range(2):
         try:
-            decoded = s.encode("latin-1", "backslashreplace").decode(
-                "unicode_escape"
-            )
+            decoded = s.encode("latin-1", "backslashreplace").decode("unicode_escape")
         except (UnicodeDecodeError, UnicodeEncodeError):
             return s
         if decoded == s:
@@ -423,7 +429,9 @@ def _speaking_summary(event: str, rec: dict[str, Any]) -> str:
     if event == "emergency_turn_end":
         return f"emergency end · {rec.get('emergency_id')} · {rec.get('verdict')}"
     if event == "quiet_queue_enter":
-        return f"quiet-queue · {rec.get('sender_name')} ({rec.get('queue_size')} queued)"
+        return (
+            f"quiet-queue · {rec.get('sender_name')} ({rec.get('queue_size')} queued)"
+        )
     if event == "quiet_queue_drain":
         return f"quiet-queue drain · {rec.get('count')} msgs ({rec.get('reason')})"
     if event == "config_reload":
@@ -451,7 +459,9 @@ def _parse_turn_log_record(
     rec: dict[str, Any], _state: None
 ) -> tuple[UnifiedEvent | None, None]:
     ts = float(rec.get("ts") or 0.0)
-    summary = f"[turn-log] {rec.get('sender_name')} → {_trim(rec.get('inbound') or '', 80)}"
+    summary = (
+        f"[turn-log] {rec.get('sender_name')} → {_trim(rec.get('inbound') or '', 80)}"
+    )
     return (
         UnifiedEvent(
             ts=ts,
@@ -707,11 +717,11 @@ WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)(?:[|#][^\]]*)?\]\]")
 
 @dataclass
 class MemoryNode:
-    id: str         # stable id (relative path without .md)
-    label: str      # display name
-    path: str       # absolute path for viewing
-    folder: str     # first segment, e.g. "memory" or "memory/sources"
-    size: int       # bytes
+    id: str  # stable id (relative path without .md)
+    label: str  # display name
+    path: str  # absolute path for viewing
+    folder: str  # first segment, e.g. "memory" or "memory/sources"
+    size: int  # bytes
     mtime: float
 
 
@@ -739,7 +749,9 @@ def read_memory_graph(mind: pathlib.Path) -> tuple[list[MemoryNode], list[Memory
                 rel = path.relative_to(mind).with_suffix("")
             except ValueError:
                 continue
-            node_id = str(rel)  # e.g. "cortex-memory/people/friend" or "memory/2026-04-24"
+            node_id = str(
+                rel
+            )  # e.g. "cortex-memory/people/friend" or "memory/2026-04-24"
             label = path.stem
             folder = "/".join(rel.parts[:-1]) or rel.parts[0]
             try:
@@ -804,15 +816,17 @@ def read_memory_graph(mind: pathlib.Path) -> tuple[list[MemoryNode], list[Memory
 # folders under memory/ (how-to-operate directives, one folder per domain),
 # and unresolved ghosts are also excluded — none belong to a single
 # topical lobe.
-_TOPICAL_CORTEX = frozenset({
-    "cortex-memory/people",
-    "cortex-memory/projects",
-    "cortex-memory/reference",
-    "cortex-memory/feedback",
-    "cortex-memory/sources",
-    "cortex-memory/conflicts",
-    "cortex-memory/research",
-})
+_TOPICAL_CORTEX = frozenset(
+    {
+        "cortex-memory/people",
+        "cortex-memory/projects",
+        "cortex-memory/reference",
+        "cortex-memory/feedback",
+        "cortex-memory/sources",
+        "cortex-memory/conflicts",
+        "cortex-memory/research",
+    }
+)
 
 
 def _is_topical(folder: str) -> bool:
@@ -1052,7 +1066,9 @@ def compute_cluster_metrics(
         if cid == "misc":
             cluster_label = "cl-misc"
         elif local_hubs_ids:
-            cluster_label = _label_for_hub(label_by_id.get(local_hubs_ids[0], local_hubs_ids[0]))
+            cluster_label = _label_for_hub(
+                label_by_id.get(local_hubs_ids[0], local_hubs_ids[0])
+            )
         else:
             cluster_label = f"cl-{cid}"
         cluster_label_by_cid[cid] = cluster_label
@@ -1081,7 +1097,9 @@ def compute_cluster_metrics(
     # weight_normalized = weight / sqrt(|A| * |B|) — comparable across
     # lobe-size pairs, where raw weight is not. Both are surfaced;
     # "low coupling" only means something on the normalized form.
-    cluster_size_by_cid = {cid: len(members_by_cid.get(cid, [])) for cid in members_by_cid}
+    cluster_size_by_cid = {
+        cid: len(members_by_cid.get(cid, [])) for cid in members_by_cid
+    }
     cross_pairs: dict[tuple[str, str], int] = {}
     for s, t in topical_edges:
         cs = node_cluster.get(s)
@@ -1151,7 +1169,7 @@ def search_memory(
             fm_match = FRONTMATTER_RE.match(body)
             if fm_match:
                 fm_text = fm_match.group(1)
-                body_text = body[fm_match.end():]
+                body_text = body[fm_match.end() :]
             else:
                 fm_text = ""
                 body_text = body
@@ -1191,13 +1209,15 @@ def search_memory(
                     title = line.partition(":")[2].strip()
                     break
 
-            results.append({
-                "id": str(rel),
-                "label": label,
-                "title": title,
-                "score": score,
-                "matched_in": matched_in,
-            })
+            results.append(
+                {
+                    "id": str(rel),
+                    "label": label,
+                    "title": title,
+                    "score": score,
+                    "matched_in": matched_in,
+                }
+            )
 
     results.sort(key=lambda r: (-r["score"], r["label"]))
     return results[:limit]

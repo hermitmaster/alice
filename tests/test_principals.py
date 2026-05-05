@@ -17,31 +17,35 @@ from alice_speaking.transports.base import ChannelRef, InboundMessage, Principal
 
 
 def _book() -> AddressBook:
-    return AddressBook([
-        PrincipalRecord(
-            id="owner",
-            display_name="Owner",
-            channels=[
-                PrincipalChannel(
-                    transport="signal", address="+15555550100",
-                    durable=True, preferred=True,
-                ),
-                PrincipalChannel(
-                    transport="cli", address="1000", durable=False
-                ),
-            ],
-        ),
-        PrincipalRecord(
-            id="friend",
-            display_name="Friend",
-            channels=[
-                PrincipalChannel(
-                    transport="signal", address="+15555550101",
-                    durable=True, preferred=True,
-                ),
-            ],
-        ),
-    ])
+    return AddressBook(
+        [
+            PrincipalRecord(
+                id="owner",
+                display_name="Owner",
+                channels=[
+                    PrincipalChannel(
+                        transport="signal",
+                        address="+15555550100",
+                        durable=True,
+                        preferred=True,
+                    ),
+                    PrincipalChannel(transport="cli", address="1000", durable=False),
+                ],
+            ),
+            PrincipalRecord(
+                id="friend",
+                display_name="Friend",
+                channels=[
+                    PrincipalChannel(
+                        transport="signal",
+                        address="+15555550101",
+                        durable=True,
+                        preferred=True,
+                    ),
+                ],
+            ),
+        ]
+    )
 
 
 def test_lookup_by_native_signal():
@@ -60,11 +64,15 @@ def test_lookup_by_native_cli():
 
 def test_lookup_by_id_case_insensitive_on_id_and_display_name():
     # Use distinct id vs display_name so each branch of the lookup is exercised.
-    book = AddressBook([PrincipalRecord(
-        id="alpha",
-        display_name="Owner",
-        channels=[PrincipalChannel(transport="signal", address="+15555550100")],
-    )])
+    book = AddressBook(
+        [
+            PrincipalRecord(
+                id="alpha",
+                display_name="Owner",
+                channels=[PrincipalChannel(transport="signal", address="+15555550100")],
+            )
+        ]
+    )
     assert book.lookup_by_id("alpha").id == "alpha"
     assert book.lookup_by_id("ALPHA").id == "alpha"
     assert book.lookup_by_id("Owner").id == "alpha"
@@ -110,55 +118,63 @@ def test_display_name_falls_back_to_native_id_when_unknown():
 
 def test_address_book_rejects_duplicate_id():
     with pytest.raises(ValueError):
-        AddressBook([
-            PrincipalRecord(id="x", display_name="X", channels=[]),
-            PrincipalRecord(id="x", display_name="X again", channels=[]),
-        ])
+        AddressBook(
+            [
+                PrincipalRecord(id="x", display_name="X", channels=[]),
+                PrincipalRecord(id="x", display_name="X again", channels=[]),
+            ]
+        )
 
 
 def test_address_book_rejects_native_address_collision():
     with pytest.raises(ValueError):
-        AddressBook([
-            PrincipalRecord(
-                id="a", display_name="A",
-                channels=[PrincipalChannel(transport="signal", address="+1")],
-            ),
-            PrincipalRecord(
-                id="b", display_name="B",
-                channels=[PrincipalChannel(transport="signal", address="+1")],
-            ),
-        ])
+        AddressBook(
+            [
+                PrincipalRecord(
+                    id="a",
+                    display_name="A",
+                    channels=[PrincipalChannel(transport="signal", address="+1")],
+                ),
+                PrincipalRecord(
+                    id="b",
+                    display_name="B",
+                    channels=[PrincipalChannel(transport="signal", address="+1")],
+                ),
+            ]
+        )
 
 
 def test_learn_refreshes_display_name():
     book = _book()
-    book.learn(InboundMessage(
-        principal=Principal(
-            transport="signal", native_id="+15555550100",
-            display_name="Owner (work phone)",
-        ),
-        origin=ChannelRef(
-            transport="signal", address="+15555550100", durable=True
-        ),
-        text="hi",
-        timestamp=0.0,
-    ))
+    book.learn(
+        InboundMessage(
+            principal=Principal(
+                transport="signal",
+                native_id="+15555550100",
+                display_name="Owner (work phone)",
+            ),
+            origin=ChannelRef(transport="signal", address="+15555550100", durable=True),
+            text="hi",
+            timestamp=0.0,
+        )
+    )
     assert book.lookup_by_id("owner").display_name == "Owner (work phone)"
 
 
 def test_learn_skips_unknown_principals():
     book = _book()
-    book.learn(InboundMessage(
-        principal=Principal(
-            transport="signal", native_id="+19999999999",
-            display_name="Stranger",
-        ),
-        origin=ChannelRef(
-            transport="signal", address="+19999999999", durable=True
-        ),
-        text="hi",
-        timestamp=0.0,
-    ))
+    book.learn(
+        InboundMessage(
+            principal=Principal(
+                transport="signal",
+                native_id="+19999999999",
+                display_name="Stranger",
+            ),
+            origin=ChannelRef(transport="signal", address="+19999999999", durable=True),
+            text="hi",
+            timestamp=0.0,
+        )
+    )
     # Did not auto-add — ACL still rejects.
     assert book.is_allowed("signal", "+19999999999") is False
 
@@ -169,7 +185,8 @@ def test_learn_skips_unknown_principals():
 
 def test_load_from_yaml(tmp_path: pathlib.Path):
     p = tmp_path / "principals.yaml"
-    p.write_text(textwrap.dedent("""\
+    p.write_text(
+        textwrap.dedent("""\
         principals:
           owner:
             display_name: Owner
@@ -182,7 +199,8 @@ def test_load_from_yaml(tmp_path: pathlib.Path):
             channels:
               - {transport: signal, address: "+15555550101"}
             allowed: false
-    """))
+    """)
+    )
     book = load(yaml_path=p)
     assert book.lookup_by_id("owner").display_name == "Owner"
     assert book.is_allowed("signal", "+15555550100") is True
@@ -217,7 +235,8 @@ def test_load_normalizes_bare_discord_ids_to_user_prefix(tmp_path: pathlib.Path)
     YAMLs used bare numeric ids (DM-only); the loader auto-prefixes
     them with ``user:`` so back-compat lookups keep working."""
     p = tmp_path / "principals.yaml"
-    p.write_text(textwrap.dedent("""\
+    p.write_text(
+        textwrap.dedent("""\
         principals:
           owner:
             display_name: Owner
@@ -225,7 +244,8 @@ def test_load_normalizes_bare_discord_ids_to_user_prefix(tmp_path: pathlib.Path)
               - {transport: discord, address: "123"}              # bare → user:123
               - {transport: discord, address: "user:456"}         # already prefixed
               - {transport: discord, address: "channel:789"}      # guild
-    """))
+    """)
+    )
     book = load(yaml_path=p)
     addresses = {ch.address for ch in book.lookup_by_id("owner").channels}
     assert addresses == {"user:123", "user:456", "channel:789"}

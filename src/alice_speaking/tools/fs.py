@@ -34,9 +34,7 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": f"error: {text}"}], "isError": True}
 
 
-def build(
-    cfg: Config, *, personae: Personae | None = None
-) -> list[SdkMcpTool[Any]]:
+def build(cfg: Config, *, personae: Personae | None = None) -> list[SdkMcpTool[Any]]:
     p = personae or placeholder_personae()
     agent = p.agent.name
 
@@ -72,10 +70,10 @@ def build(
     @tool(
         name="edit_file",
         description=(
-            f"Replace exact-match text in a file. Like the harness's Edit "
-            f"tool but without the path gate. `old_string` must appear "
-            f"exactly once unless `replace_all` is true. Errors if the file "
-            f"does not exist or `old_string` is not found."
+            "Replace exact-match text in a file. Like the harness's Edit "
+            "tool but without the path gate. `old_string` must appear "
+            "exactly once unless `replace_all` is true. Errors if the file "
+            "does not exist or `old_string` is not found."
         ),
         input_schema={
             "path": str,
@@ -108,7 +106,9 @@ def build(
         if count == 0:
             return _err("old_string not found")
         if count > 1 and not replace_all:
-            return _err(f"old_string appears {count} times; pass replace_all=true to apply to all")
+            return _err(
+                f"old_string appears {count} times; pass replace_all=true to apply to all"
+            )
         new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
         try:
             path.write_text(new_text)

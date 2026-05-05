@@ -117,9 +117,7 @@ def _parse_address(address: str) -> tuple[str, int]:
     try:
         return kind, int(raw)
     except ValueError as exc:
-        raise ValueError(
-            f"discord address id must be numeric, got {raw!r}"
-        ) from exc
+        raise ValueError(f"discord address id must be numeric, got {raw!r}") from exc
 
 
 class DiscordTransport:
@@ -215,9 +213,7 @@ class DiscordTransport:
         # Discord usernames have changed: ``global_name`` is the new
         # display name (introduced 2023). Fall back to legacy ``name`` for
         # bots / older clients that haven't migrated.
-        display_name = (
-            getattr(author, "global_name", None) or author.name
-        )
+        display_name = getattr(author, "global_name", None) or author.name
         # Principal native_id always uses the user prefix — it's the
         # *who*, not the *where*. Origin uses user: for DMs, channel:
         # for guild messages — that's how the daemon's _send_message
@@ -234,9 +230,7 @@ class DiscordTransport:
             native_id=principal_address,
             display_name=display_name,
         )
-        origin = ChannelRef(
-            transport="discord", address=origin_address, durable=True
-        )
+        origin = ChannelRef(transport="discord", address=origin_address, durable=True)
         inbound = InboundMessage(
             principal=principal,
             origin=origin,
@@ -295,9 +289,7 @@ class DiscordTransport:
             await target.send(payload)
         return total
 
-    async def _resolve_destination(
-        self, address: str
-    ) -> discord.abc.Messageable:
+    async def _resolve_destination(self, address: str) -> discord.abc.Messageable:
         """Map an address (``user:<id>`` or ``channel:<id>``) to the
         discord.py object whose ``.send(text)`` delivers there."""
         kind, snowflake = _parse_address(address)

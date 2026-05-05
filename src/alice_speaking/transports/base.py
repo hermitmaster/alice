@@ -48,8 +48,8 @@ class Principal:
     ``display_name`` is for prompts and logs only.
     """
 
-    transport: str       # "signal" | "cli" | "discord"
-    native_id: str       # phone number, unix uid, discord user id
+    transport: str  # "signal" | "cli" | "discord"
+    native_id: str  # phone number, unix uid, discord user id
     display_name: str
 
     def __post_init__(self) -> None:

@@ -42,9 +42,7 @@ CORE_DIR = pathlib.Path(__file__).resolve().parents[1] / "src" / "alice_core"
 
 
 def _alice_core_python_files() -> list[pathlib.Path]:
-    return sorted(
-        p for p in CORE_DIR.rglob("*.py") if "__pycache__" not in p.parts
-    )
+    return sorted(p for p in CORE_DIR.rglob("*.py") if "__pycache__" not in p.parts)
 
 
 def _toplevel_imports(tree: ast.AST) -> list[str]:

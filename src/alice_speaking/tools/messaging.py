@@ -77,9 +77,7 @@ log = logging.getLogger(__name__)
 # Directory shared between alice-worker and alice-daemon containers.
 # Both mount ${HOME}/.local/state/alice at /state, so /state/outbox/ is
 # writable from worker and readable from daemon at the same path.
-DEFAULT_OUTBOX_DIR = pathlib.Path(
-    os.environ.get("ALICE_OUTBOX_DIR", "/state/outbox")
-)
+DEFAULT_OUTBOX_DIR = pathlib.Path(os.environ.get("ALICE_OUTBOX_DIR", "/state/outbox"))
 
 
 def _ok(text: str) -> dict[str, Any]:
@@ -182,9 +180,7 @@ def _cleanup(paths: list[str]) -> None:
 # :data:`SELF_RECIPIENT` sentinel (str) or a resolved :class:`ChannelRef`.
 # ``attachments`` is None when no media rides along — callers MAY pass an
 # empty list and we treat that the same as None.
-SendCallable = Callable[
-    [ResolvedRecipient, str, Optional[list[str]]], Awaitable[None]
-]
+SendCallable = Callable[[ResolvedRecipient, str, Optional[list[str]]], Awaitable[None]]
 
 
 async def send_message_from_args(

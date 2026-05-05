@@ -128,14 +128,10 @@ def test_dispatch_unknown_transport_raises(tmp_path):
 
 def test_signal_send_queues_in_quiet_hours(tmp_path, monkeypatch):
     sig = _StubTransport()
-    router, _, queue, _, log_path = _make_router(
-        tmp_path, transports={"signal": sig}
-    )
+    router, _, queue, _, log_path = _make_router(tmp_path, transports={"signal": sig})
     monkeypatch.setattr(outbox_module, "is_quiet_hours", lambda *_a, **_k: True)
 
-    channel = ChannelRef(
-        transport="signal", address="+15555550100", durable=True
-    )
+    channel = ChannelRef(transport="signal", address="+15555550100", durable=True)
     asyncio.run(router.dispatch(channel, "good morning"))
 
     # Sent-via-transport never happened — went to queue.
@@ -152,17 +148,11 @@ def test_signal_send_queues_in_quiet_hours(tmp_path, monkeypatch):
 
 def test_signal_send_bypasses_quiet_when_flagged(tmp_path, monkeypatch):
     sig = _StubTransport()
-    router, _, queue, _, log_path = _make_router(
-        tmp_path, transports={"signal": sig}
-    )
+    router, _, queue, _, log_path = _make_router(tmp_path, transports={"signal": sig})
     monkeypatch.setattr(outbox_module, "is_quiet_hours", lambda *_a, **_k: True)
 
-    channel = ChannelRef(
-        transport="signal", address="+15555550100", durable=True
-    )
-    asyncio.run(
-        router.dispatch(channel, "wake up", bypass_quiet=True, emergency=True)
-    )
+    channel = ChannelRef(transport="signal", address="+15555550100", durable=True)
+    asyncio.run(router.dispatch(channel, "wake up", bypass_quiet=True, emergency=True))
 
     assert len(sig.sent) == 1
     assert queue.size() == 0
@@ -191,13 +181,9 @@ def test_cli_send_never_queues(tmp_path, monkeypatch):
 
 def test_attachments_stripped_for_non_signal_transports(tmp_path):
     discord = _StubTransport()
-    router, _, _, _, _ = _make_router(
-        tmp_path, transports={"discord": discord}
-    )
+    router, _, _, _, _ = _make_router(tmp_path, transports={"discord": discord})
     channel = ChannelRef(transport="discord", address="user:123", durable=True)
-    asyncio.run(
-        router.dispatch(channel, "hi", attachments=["/tmp/a.png"])
-    )
+    asyncio.run(router.dispatch(channel, "hi", attachments=["/tmp/a.png"]))
     [out] = discord.sent
     assert out.attachments == []
 
@@ -205,12 +191,8 @@ def test_attachments_stripped_for_non_signal_transports(tmp_path):
 def test_attachments_passed_through_for_signal(tmp_path):
     sig = _StubTransport()
     router, _, _, _, _ = _make_router(tmp_path, transports={"signal": sig})
-    channel = ChannelRef(
-        transport="signal", address="+15555550100", durable=True
-    )
-    asyncio.run(
-        router.dispatch(channel, "look", attachments=["/tmp/a.png"])
-    )
+    channel = ChannelRef(transport="signal", address="+15555550100", durable=True)
+    asyncio.run(router.dispatch(channel, "look", attachments=["/tmp/a.png"]))
     [out] = sig.sent
     assert out.attachments == ["/tmp/a.png"]
 
@@ -230,9 +212,7 @@ def test_send_event_uses_principal_display_name_when_address_unresolvable(
     router, _, _, _, log_path = _make_router(tmp_path, transports={"cli": cli})
 
     channel = ChannelRef(transport="cli", address="conn-xyz", durable=False)
-    asyncio.run(
-        router.dispatch(channel, "hi", principal_display_name="Owner")
-    )
+    asyncio.run(router.dispatch(channel, "hi", principal_display_name="Owner"))
     events = _read_events(log_path)
     [cli_send] = [ev for ev in events if ev["event"] == "cli_send"]
     assert cli_send["sender_name"] == "Owner"

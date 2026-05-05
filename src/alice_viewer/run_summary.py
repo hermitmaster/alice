@@ -40,8 +40,10 @@ CACHE_SCHEMA = 3
 
 def cache_dir() -> pathlib.Path:
     override = os.environ.get("ALICE_VIEWER_CACHE_DIR")
-    base = pathlib.Path(override) if override else (
-        pathlib.Path.home() / ".local/state/alice/viewer-cache"
+    base = (
+        pathlib.Path(override)
+        if override
+        else (pathlib.Path.home() / ".local/state/alice/viewer-cache")
     )
     return base / "run-summaries"
 
@@ -163,9 +165,7 @@ def _build_prompt(events: list) -> str:
             name = ev.detail.get("name", "?")
             raw_input = ev.detail.get("input", "")
             primary = _tool_primary(name, raw_input)
-            tool_lines.append(
-                f"- {name}" + (f": {primary[:200]}" if primary else "")
-            )
+            tool_lines.append(f"- {name}" + (f": {primary[:200]}" if primary else ""))
 
     sampled_thoughts = _sample_thoughts(thoughts)
 
@@ -227,7 +227,15 @@ def _tool_primary(name: str, raw_input: Any) -> str:
         parsed = raw_input
     if not isinstance(parsed, dict):
         return str(parsed)[:200]
-    for key in ("file_path", "command", "pattern", "url", "query", "content", "message"):
+    for key in (
+        "file_path",
+        "command",
+        "pattern",
+        "url",
+        "query",
+        "content",
+        "message",
+    ):
         v = parsed.get(key)
         if isinstance(v, str) and v:
             return v

@@ -178,23 +178,25 @@ class PiEventTranslator:
             return
 
         if kind in ("compaction_start", "compaction_end"):
-            self._emit("compaction", phase=kind, **{
-                k: v for k, v in event.items() if k not in ("type",)
-            })
+            self._emit(
+                "compaction",
+                phase=kind,
+                **{k: v for k, v in event.items() if k not in ("type",)},
+            )
             return
 
         if kind in ("auto_retry_start", "auto_retry_end"):
-            self._emit("auto_retry", phase=kind, **{
-                k: v for k, v in event.items() if k not in ("type",)
-            })
+            self._emit(
+                "auto_retry",
+                phase=kind,
+                **{k: v for k, v in event.items() if k not in ("type",)},
+            )
             return
 
         if kind == "error":
             self._state.is_error = True
             self._state.error_message = (
-                event.get("message")
-                or event.get("error")
-                or "pi reported an error"
+                event.get("message") or event.get("error") or "pi reported an error"
             )
             raise RuntimeError(f"pi error: {self._state.error_message}")
 
@@ -260,13 +262,8 @@ class PiEventTranslator:
         # Derive duration: from the first message we saw (user prompt
         # if message_start fired, otherwise this assistant message)
         # to the assistant's terminal timestamp.
-        if (
-            self._state.start_ms is not None
-            and self._state.last_message_ms is not None
-        ):
-            self._state.duration_ms = (
-                self._state.last_message_ms - self._state.start_ms
-            )
+        if self._state.start_ms is not None and self._state.last_message_ms is not None:
+            self._state.duration_ms = self._state.last_message_ms - self._state.start_ms
 
         self._emit(
             "result",

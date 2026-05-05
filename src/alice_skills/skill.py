@@ -40,7 +40,7 @@ def _strip_frontmatter(text: str) -> tuple[str, str]:
     m = _FRONTMATTER_RE.match(text)
     if not m:
         return ("", text)
-    return (m.group(1), text[m.end():])
+    return (m.group(1), text[m.end() :])
 
 
 def _parse_frontmatter(yaml_body: str, *, source: pathlib.Path) -> Mapping[str, Any]:
@@ -62,8 +62,7 @@ def _parse_frontmatter(yaml_body: str, *, source: pathlib.Path) -> Mapping[str, 
         return {}
     if not isinstance(data, Mapping):
         raise SkillError(
-            f"{source}: frontmatter must be a YAML mapping (got "
-            f"{type(data).__name__})"
+            f"{source}: frontmatter must be a YAML mapping (got {type(data).__name__})"
         )
     return data
 
@@ -190,9 +189,7 @@ class Skill:
 
         name = fm.get("name") or skill_md.parent.name
         if not isinstance(name, str) or not name.strip():
-            raise SkillError(
-                f"{skill_md}: 'name' must be a non-empty string"
-            )
+            raise SkillError(f"{skill_md}: 'name' must be a non-empty string")
 
         desc = fm.get("description")
         if not isinstance(desc, str) or not desc.strip():
@@ -252,8 +249,7 @@ def _parse_op(op_path: pathlib.Path, *, parent_scope: SkillScope) -> Skill:
     scope_raw = fm.get("scope", parent_scope)
     if scope_raw not in _VALID_SCOPES:
         raise SkillError(
-            f"{op_path}: scope = {scope_raw!r}; expected one of "
-            f"{sorted(_VALID_SCOPES)}"
+            f"{op_path}: scope = {scope_raw!r}; expected one of {sorted(_VALID_SCOPES)}"
         )
     scope: SkillScope = scope_raw  # type: ignore[assignment]
 

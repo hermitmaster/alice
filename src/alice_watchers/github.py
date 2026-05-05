@@ -133,14 +133,16 @@ def load_config(mind_dir: pathlib.Path) -> WatcherConfig:
     except (OSError, json.JSONDecodeError):
         return WatcherConfig()
     block = (cfg or {}).get("github_watcher") or {}
-    repos = [r.strip() for r in (block.get("repos") or []) if isinstance(r, str) and r.strip()]
+    repos = [
+        r.strip()
+        for r in (block.get("repos") or [])
+        if isinstance(r, str) and r.strip()
+    ]
     enabled = bool(block.get("enabled", bool(repos)))
     interval = int(block.get("poll_interval_seconds") or 300)
     raw_trust = block.get("trusted_associations")
     if isinstance(raw_trust, list) and raw_trust:
-        trust = frozenset(
-            str(s).strip().upper() for s in raw_trust if str(s).strip()
-        )
+        trust = frozenset(str(s).strip().upper() for s in raw_trust if str(s).strip())
     else:
         trust = frozenset(DEFAULT_TRUSTED_ASSOCIATIONS)
     return WatcherConfig(
@@ -172,7 +174,10 @@ def load_state(state_path: pathlib.Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         # Corrupt state file: log via stderr and start fresh. Re-firing
         # historical events once is acceptable; staying broken isn't.
-        print(f"[gh-watcher] state at {state_path} is corrupt — resetting", file=sys.stderr)
+        print(
+            f"[gh-watcher] state at {state_path} is corrupt — resetting",
+            file=sys.stderr,
+        )
         return {"version": 1, "repos": {}}
     if data.get("version") != 1:
         return {"version": 1, "repos": {}}
@@ -193,7 +198,9 @@ def save_state(state_path: pathlib.Path, state: dict[str, Any]) -> None:
             if len(ids) > SEEN_ID_CAP:
                 repo_state[key] = ids[-SEEN_ID_CAP:]
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=state_path.parent, prefix=".gh-watcher-", suffix=".json")
+    fd, tmp = tempfile.mkstemp(
+        dir=state_path.parent, prefix=".gh-watcher-", suffix=".json"
+    )
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(state, fh, indent=2, sort_keys=True)
@@ -313,8 +320,12 @@ def poll_repo(
     events: list[Event] = []
 
     seen_review_ids: set[int] = set(repo_state.get("seen_review_ids") or [])
-    seen_review_comment_ids: set[int] = set(repo_state.get("seen_review_comment_ids") or [])
-    seen_issue_comment_ids: set[int] = set(repo_state.get("seen_issue_comment_ids") or [])
+    seen_review_comment_ids: set[int] = set(
+        repo_state.get("seen_review_comment_ids") or []
+    )
+    seen_issue_comment_ids: set[int] = set(
+        repo_state.get("seen_issue_comment_ids") or []
+    )
     seen_standalone_issue_comment_ids: set[int] = set(
         repo_state.get("seen_standalone_issue_comment_ids") or []
     )
@@ -323,9 +334,12 @@ def poll_repo(
     issue_state_map: dict[str, str] = dict(repo_state.get("issue_state") or {})
 
     # ---- PRs ---------------------------------------------------------------
-    pulls = api(
-        f"repos/{repo}/pulls?state=all&sort=updated&direction=desc&per_page={RECENT_PR_LIMIT}"
-    ) or []
+    pulls = (
+        api(
+            f"repos/{repo}/pulls?state=all&sort=updated&direction=desc&per_page={RECENT_PR_LIMIT}"
+        )
+        or []
+    )
 
     for pr in pulls:
         n = pr.get("number")
@@ -451,17 +465,19 @@ def poll_repo(
         if head_sha:
             try:
                 check_runs = (
-                    api(
-                        f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100"
-                    )
+                    api(f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100")
                     or {}
                 )
             except GHCommandError:
                 check_runs = {}
-            for run in (check_runs.get("check_runs") or []):
+            for run in check_runs.get("check_runs") or []:
                 if run.get("status") != "completed":
                     continue
-                if run.get("conclusion") not in ("failure", "timed_out", "action_required"):
+                if run.get("conclusion") not in (
+                    "failure",
+                    "timed_out",
+                    "action_required",
+                ):
                     continue
                 run_id = run.get("id")
                 if not isinstance(run_id, int) or run_id in seen_check_run_ids:
@@ -484,9 +500,12 @@ def poll_repo(
     # /repos/{repo}/issues returns BOTH issues and PRs; PRs carry a
     # ``pull_request`` key, pure issues don't. We filter the PRs out here
     # since the /pulls loop above already covers them.
-    issues = api(
-        f"repos/{repo}/issues?state=all&sort=updated&direction=desc&per_page={RECENT_PR_LIMIT}"
-    ) or []
+    issues = (
+        api(
+            f"repos/{repo}/issues?state=all&sort=updated&direction=desc&per_page={RECENT_PR_LIMIT}"
+        )
+        or []
+    )
 
     for issue in issues:
         if issue.get("pull_request"):
@@ -690,9 +709,7 @@ def render_note(event: Event) -> tuple[str, str]:
         return slug, body
 
     if event.kind == "pr_state":
-        slug = _slugify(
-            f"github-{repo_slug}-pr{event.number}-{event.payload['to']}"
-        )
+        slug = _slugify(f"github-{repo_slug}-pr{event.number}-{event.payload['to']}")
         body = (
             f"PR state change on {pr_ref} ({event.title})\n"
             f"transition: {event.payload['from']} → {event.payload['to']}\n"
@@ -731,9 +748,7 @@ def render_note(event: Event) -> tuple[str, str]:
         return slug, body
 
     if event.kind == "issue_state":
-        slug = _slugify(
-            f"github-{repo_slug}-issue{event.number}-{event.payload['to']}"
-        )
+        slug = _slugify(f"github-{repo_slug}-issue{event.number}-{event.payload['to']}")
         body = (
             f"Issue state change on {event.repo}#{event.number} ({event.title})\n"
             f"transition: {event.payload['from']} → {event.payload['to']}\n"
@@ -759,7 +774,9 @@ def render_note(event: Event) -> tuple[str, str]:
     raise ValueError(f"unknown event kind: {event.kind}")
 
 
-def write_note(notes_dir: pathlib.Path, slug: str, body: str, *, tag: str = "github") -> pathlib.Path:
+def write_note(
+    notes_dir: pathlib.Path, slug: str, body: str, *, tag: str = "github"
+) -> pathlib.Path:
     """Write one note in the same shape as ``append_note`` so thinking
     drains it through the normal pipeline."""
     notes_dir.mkdir(parents=True, exist_ok=True)
@@ -783,8 +800,7 @@ def _write_auth_error_note(
     if last_at:
         try:
             delta = (
-                dt.datetime.now(dt.timezone.utc)
-                - dt.datetime.fromisoformat(last_at)
+                dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(last_at)
             ).total_seconds()
         except ValueError:
             delta = AUTH_ERROR_NOTE_INTERVAL_SECONDS + 1
@@ -799,7 +815,9 @@ def _write_auth_error_note(
         "\n"
         f"stderr: {_truncate(err.stderr, 600)}\n"
     )
-    return write_note(notes_dir, "github-watcher-auth-failed", body, tag="github-watcher-error")
+    return write_note(
+        notes_dir, "github-watcher-auth-failed", body, tag="github-watcher-error"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -864,7 +882,9 @@ def run(
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="One pass of the agent's GitHub watcher.")
+    parser = argparse.ArgumentParser(
+        description="One pass of the agent's GitHub watcher."
+    )
     parser.add_argument("--mind", default=str(DEFAULT_MIND), help="alice-mind path")
     parser.add_argument(
         "--state",

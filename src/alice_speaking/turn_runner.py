@@ -45,7 +45,9 @@ from typing import Any, Awaitable, Callable, Optional
 
 from alice_core.config.model import BackendSpec
 from alice_core.kernel import KernelSpec, NullHandler, make_kernel
-from alice_core.sdk_compat import looks_like_missing_session as _looks_like_missing_session
+from alice_core.sdk_compat import (
+    looks_like_missing_session as _looks_like_missing_session,
+)
 
 from .domain import session_state
 from .domain.turn_log import TurnLog
@@ -176,9 +178,7 @@ class TurnRunner:
             log.info("primed bootstrap preamble from context summary")
             return
 
-        bootstrap_turns = int(
-            self._cfg.speaking.get("context_bootstrap_turns", 20)
-        )
+        bootstrap_turns = int(self._cfg.speaking.get("context_bootstrap_turns", 20))
         tail = self._turns.tail(bootstrap_turns)
         preamble = compaction_module.build_bootstrap_preamble(tail)
         if preamble:
@@ -188,9 +188,7 @@ class TurnRunner:
                 source="turn_log",
                 tail_len=len(tail),
             )
-            log.info(
-                "primed bootstrap preamble from turn_log (%d turns)", len(tail)
-            )
+            log.info("primed bootstrap preamble from turn_log (%d turns)", len(tail))
 
     def compose_prompt(self, prompt: str) -> str:
         """Prepend the one-shot bootstrap preamble if one is pending."""
@@ -251,9 +249,7 @@ class TurnRunner:
                     compaction_module.DEFAULT_THRESHOLD,
                 )
             )
-            handlers.append(
-                CompactionArmer(threshold=threshold, arm=_arm_compaction)
-            )
+            handlers.append(CompactionArmer(threshold=threshold, arm=_arm_compaction))
         # CLI trace pass-through. No-op when the active channel isn't
         # CLI, so safe to install for every turn — signal/discord/
         # surface turns silently skip. Installed for silent turns too:

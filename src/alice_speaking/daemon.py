@@ -75,6 +75,7 @@ from .transports import (
     ChannelRef,
     SignalTransport,
 )
+
 # DiscordTransport is imported lazily below, only when the daemon is actually
 # configured to use Discord. Module-top ``import discord`` in transports.discord
 # would otherwise crash the daemon at import time when discord.py isn't
@@ -147,7 +148,9 @@ class SpeakingDaemon:
         self.dedup = DedupStore(cfg.seen_path)
         self.turns = TurnLog(cfg.turn_log_path)
         self.events = EventLogger(cfg.event_log_path)
-        self.quiet_queue = QuietQueue(cfg.mind_dir / "inner" / "state" / "quiet-queue.jsonl")
+        self.quiet_queue = QuietQueue(
+            cfg.mind_dir / "inner" / "state" / "quiet-queue.jsonl"
+        )
 
         # State directory — used for session.json and context-summary.md.
         self._state_dir = cfg.mind_dir / "inner" / "state"
@@ -261,6 +264,7 @@ class SpeakingDaemon:
         self.discord_transport: Optional["DiscordTransport"] = None
         if cfg.discord_bot_token:
             from .transports.discord import DiscordTransport
+
             self.discord_transport = DiscordTransport(token=cfg.discord_bot_token)
 
         # A2A transport — optional. Constructed only when explicitly
@@ -269,6 +273,7 @@ class SpeakingDaemon:
         self.a2a_transport: Optional["A2ATransport"] = None
         if cfg.a2a_enabled:
             from .transports.a2a import A2ATransport
+
             self.a2a_transport = A2ATransport(
                 port=cfg.a2a_port,
                 host=cfg.a2a_host,
@@ -302,6 +307,7 @@ class SpeakingDaemon:
         # emergency handlers) sees this mind's override path.
         # ``self._personae`` was resolved earlier (before tools_module.build).
         import alice_prompts as _prompts
+
         _prompts.set_default_loader(
             factory_module.build_prompt_loader(cfg, self._personae)
         )
@@ -570,7 +576,9 @@ class SpeakingDaemon:
                 {*producers, consumer, stop_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            log.info("shutdown starting (triggered by %s)", [t.get_name() for t in done])
+            log.info(
+                "shutdown starting (triggered by %s)", [t.get_name() for t in done]
+            )
             for task in (*producers, consumer):
                 task.cancel()
             for task in (*producers, consumer):
@@ -618,9 +626,7 @@ class SpeakingDaemon:
             try:
                 source = self._registry.lookup(type(event))
                 if source is None:
-                    log.warning(
-                        "no handler for event type: %s", type(event).__name__
-                    )
+                    log.warning("no handler for event type: %s", type(event).__name__)
                     continue
                 async with self._turn_lock:
                     await self._pre_turn(event)
@@ -680,11 +686,11 @@ class SpeakingDaemon:
         self.cfg.speaking.update(new_cfg.speaking)
         self._config_mtime = mtime
         changes = {
-            k: v
-            for k, v in self.cfg.speaking.items()
-            if old_speaking.get(k) != v
+            k: v for k, v in self.cfg.speaking.items() if old_speaking.get(k) != v
         }
-        log.info("config reloaded (changes: %s)", list(changes.keys()) or "none observed")
+        log.info(
+            "config reloaded (changes: %s)", list(changes.keys()) or "none observed"
+        )
         self.events.emit("config_reload", changes=list(changes.keys()))
 
     # ------------------------------------------------------------------

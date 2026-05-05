@@ -106,9 +106,7 @@ class SessionHandler(NullHandler):
         try:
             session_state.write(self._session_path, summary.session_id)
         except OSError:
-            log.exception(
-                "failed to persist session_id to %s", self._session_path
-            )
+            log.exception("failed to persist session_id to %s", self._session_path)
 
 
 class CompactionArmer(NullHandler):

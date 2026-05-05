@@ -126,9 +126,7 @@ def _coerce_str(value: Any, field_name: str) -> str:
         return ""
     if isinstance(value, str):
         return value
-    raise PersonaeError(
-        f"{field_name!r} must be a string (got {type(value).__name__})"
-    )
+    raise PersonaeError(f"{field_name!r} must be a string (got {type(value).__name__})")
 
 
 def _coerce_string_tuple(value: Any, field_name: str) -> tuple[str, ...]:
@@ -136,15 +134,13 @@ def _coerce_string_tuple(value: Any, field_name: str) -> tuple[str, ...]:
         return ()
     if not isinstance(value, list):
         raise PersonaeError(
-            f"{field_name!r} must be a list of strings "
-            f"(got {type(value).__name__})"
+            f"{field_name!r} must be a list of strings (got {type(value).__name__})"
         )
     out: list[str] = []
     for i, item in enumerate(value):
         if not isinstance(item, str):
             raise PersonaeError(
-                f"{field_name}[{i}] must be a string "
-                f"(got {type(item).__name__})"
+                f"{field_name}[{i}] must be a string (got {type(item).__name__})"
             )
         out.append(item)
     return tuple(out)

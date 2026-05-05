@@ -28,7 +28,9 @@ class QueuedMessage:
     transport: str = "signal"
 
 
-def is_quiet_hours(cfg_speaking: dict[str, Any], now: dt.datetime | None = None) -> bool:
+def is_quiet_hours(
+    cfg_speaking: dict[str, Any], now: dt.datetime | None = None
+) -> bool:
     """True if we are currently in quiet hours per the speaking config.
 
     Accepts a speaking config dict like ``cfg.speaking`` directly so the

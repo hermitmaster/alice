@@ -27,20 +27,27 @@ from alice_thinking.backoff import (
 
 def test_active_mode_always_resets_to_base() -> None:
     """Active mode is never backed off — always 5 min."""
-    assert next_interval_seconds(
-        prev_seconds=MAX_INTERVAL_SECONDS, mode="active", did_work=False
-    ) == BASE_INTERVAL_SECONDS
-    assert next_interval_seconds(
-        prev_seconds=MAX_INTERVAL_SECONDS, mode="active", did_work=True
-    ) == BASE_INTERVAL_SECONDS
+    assert (
+        next_interval_seconds(
+            prev_seconds=MAX_INTERVAL_SECONDS, mode="active", did_work=False
+        )
+        == BASE_INTERVAL_SECONDS
+    )
+    assert (
+        next_interval_seconds(
+            prev_seconds=MAX_INTERVAL_SECONDS, mode="active", did_work=True
+        )
+        == BASE_INTERVAL_SECONDS
+    )
 
 
 def test_sleep_did_work_resets_to_base() -> None:
     """Any meaningful work hard-resets the ladder."""
     for stage in ("sleep", "sleep:consolidate", "sleep:downscale", "sleep:recombine"):
-        assert next_interval_seconds(
-            prev_seconds=20 * 60, mode=stage, did_work=True
-        ) == BASE_INTERVAL_SECONDS
+        assert (
+            next_interval_seconds(prev_seconds=20 * 60, mode=stage, did_work=True)
+            == BASE_INTERVAL_SECONDS
+        )
 
 
 def test_sleep_ladder_5_10_20_40() -> None:
@@ -67,12 +74,16 @@ def test_sleep_ladder_caps_at_40() -> None:
 def test_sleep_below_base_floors_to_base_then_doubles() -> None:
     """A garbage prev value (e.g. 0) shouldn't degrade — floor it
     to BASE before doubling."""
-    assert next_interval_seconds(
-        prev_seconds=0, mode="sleep:consolidate", did_work=False
-    ) == 2 * BASE_INTERVAL_SECONDS
-    assert next_interval_seconds(
-        prev_seconds=-100, mode="sleep:consolidate", did_work=False
-    ) == 2 * BASE_INTERVAL_SECONDS
+    assert (
+        next_interval_seconds(prev_seconds=0, mode="sleep:consolidate", did_work=False)
+        == 2 * BASE_INTERVAL_SECONDS
+    )
+    assert (
+        next_interval_seconds(
+            prev_seconds=-100, mode="sleep:consolidate", did_work=False
+        )
+        == 2 * BASE_INTERVAL_SECONDS
+    )
 
 
 # ---------- atomic interval file IO ----------
@@ -135,14 +146,7 @@ def _write_wake(
     d = mind / "inner" / "thoughts" / day
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{hhmmss}-wake.md"
-    p.write_text(
-        "---\n"
-        "mode: sleep\n"
-        "stage: B\n"
-        f"did_work: {did_work}\n"
-        "---\n\n"
-        "body\n"
-    )
+    p.write_text(f"---\nmode: sleep\nstage: B\ndid_work: {did_work}\n---\n\nbody\n")
     if mtime is not None:
         os.utime(p, (mtime, mtime))
     return p

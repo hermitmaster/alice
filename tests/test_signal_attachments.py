@@ -149,7 +149,9 @@ def test_prompt_with_attachments_lists_paths(daemon, tmp_path) -> None:
         source="+15555550100",
         body="see attached",
         attachments=[
-            Attachment(id="x.jpg", path=p1, content_type="image/jpeg", filename="snap.jpg"),
+            Attachment(
+                id="x.jpg", path=p1, content_type="image/jpeg", filename="snap.jpg"
+            ),
             Attachment(id="y.pdf", path=p2, content_type="application/pdf"),
         ],
     )
@@ -185,9 +187,7 @@ def test_prompt_with_image_only_message(daemon, tmp_path) -> None:
 
 def test_prompt_with_batched_messages(daemon) -> None:
     envs = [
-        SignalEnvelope(
-            timestamp=1735131600000, source="+15555550100", body="hi alice"
-        ),
+        SignalEnvelope(timestamp=1735131600000, source="+15555550100", body="hi alice"),
         SignalEnvelope(
             timestamp=1735131605000, source="+15555550100", body="quick question"
         ),

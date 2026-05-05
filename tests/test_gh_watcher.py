@@ -169,11 +169,15 @@ def test_first_run_primes_without_emitting_notes(
     api.review_comments[42] = []
     api.check_runs["deadbeef"] = []
 
-    rc = gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    rc = gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     assert rc == 0
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
-    assert notes == [], f"first run should not emit notes, got {[n.name for n in notes]}"
+    assert notes == [], (
+        f"first run should not emit notes, got {[n.name for n in notes]}"
+    )
 
     state = json.loads(state_path.read_text())
     repo_state = state["repos"]["acme/widgets"]
@@ -204,7 +208,9 @@ def test_second_run_emits_only_new_events(
     api.check_runs["deadbeef"] = []
 
     # First pass: prime.
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     # Second pass: a new (trusted) comment shows up + a check run fails.
     api.pr_conversation_comments[42] = [
@@ -229,7 +235,9 @@ def test_second_run_emits_only_new_events(
         }
     ]
 
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     notes = sorted((mind_dir / "inner" / "notes").glob("*.md"))
     assert len(notes) == 2, [n.name for n in notes]
@@ -250,7 +258,9 @@ def test_state_transition_emits_pr_state_event(
     api.review_comments[7] = []
     api.check_runs["deadbeef"] = []
 
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     api.pulls = [
         _make_pr(
@@ -260,7 +270,9 @@ def test_state_transition_emits_pr_state_event(
             merged_at="2026-04-29T15:00:00Z",
         )
     ]
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert len(notes) == 1
@@ -284,9 +296,9 @@ def test_disabled_or_empty_repos_is_noop(
         log=lambda _: None,
     )
     assert rc == 0
-    assert not state_path.exists() or json.loads(state_path.read_text()).get("repos") in (None, {}), (
-        "no state should be written when there are no repos to poll"
-    )
+    assert not state_path.exists() or json.loads(state_path.read_text()).get(
+        "repos"
+    ) in (None, {}), "no state should be written when there are no repos to poll"
 
 
 def test_auth_failure_emits_loud_note_and_dedups(
@@ -299,7 +311,9 @@ def test_auth_failure_emits_loud_note_and_dedups(
             args=["gh", "api", "x"],
         )
 
-    rc = gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=boom, log=lambda _: None)
+    rc = gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=boom, log=lambda _: None
+    )
     assert rc == 1
 
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
@@ -307,7 +321,9 @@ def test_auth_failure_emits_loud_note_and_dedups(
     assert "github-watcher-error" in notes[0].read_text()
 
     # Second pass within the dedup window must not write another note.
-    rc2 = gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=boom, log=lambda _: None)
+    rc2 = gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=boom, log=lambda _: None
+    )
     assert rc2 == 1
     notes_after = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert len(notes_after) == 1, "auth-error note should be deduped within the window"
@@ -333,7 +349,8 @@ def test_seen_id_lists_capped(mind_dir: pathlib.Path, state_path: pathlib.Path) 
     gh_watcher.save_state(state_path, state)
     reloaded = json.loads(state_path.read_text())
     assert (
-        len(reloaded["repos"]["acme/widgets"]["seen_review_ids"]) == gh_watcher.SEEN_ID_CAP
+        len(reloaded["repos"]["acme/widgets"]["seen_review_ids"])
+        == gh_watcher.SEEN_ID_CAP
     )
     assert reloaded["repos"]["acme/widgets"]["seen_review_ids"][-1] == (
         gh_watcher.SEEN_ID_CAP + 499
@@ -348,7 +365,9 @@ def test_seen_id_lists_capped(mind_dir: pathlib.Path, state_path: pathlib.Path) 
 def test_is_trusted_association_helper() -> None:
     trusted = frozenset({"OWNER", "COLLABORATOR", "MEMBER"})
     assert gh_watcher.is_trusted_association("OWNER", trusted)
-    assert gh_watcher.is_trusted_association("collaborator", trusted)  # case-insensitive
+    assert gh_watcher.is_trusted_association(
+        "collaborator", trusted
+    )  # case-insensitive
     assert not gh_watcher.is_trusted_association("CONTRIBUTOR", trusted)
     assert not gh_watcher.is_trusted_association("FIRST_TIME_CONTRIBUTOR", trusted)
     assert not gh_watcher.is_trusted_association("NONE", trusted)
@@ -363,11 +382,15 @@ def test_trusted_owner_issue_emits_new_issue_note(
     after the prime pass produces a ``new_issue`` note."""
     api = FakeAPI()
     api.issues = []  # nothing yet at prime
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     api.issues = [_make_issue(number=11, title="Caught a bug", user="jcronq")]
     api.issue_thread_comments[11] = []
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert len(notes) == 1, [n.name for n in notes]
@@ -384,7 +407,9 @@ def test_untrusted_issue_silent_but_marked_seen(
     state still gets recorded so we don't re-evaluate it forever."""
     api = FakeAPI()
     api.issues = []
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     api.issues = [
         _make_issue(
@@ -395,7 +420,9 @@ def test_untrusted_issue_silent_but_marked_seen(
         )
     ]
     api.issue_thread_comments[99] = []
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert notes == [], "rando-opened issue must not produce a note"
@@ -414,7 +441,9 @@ def test_untrusted_issue_comment_silent_but_marked_seen(
     # Prime with the issue already there so we don't fire a new_issue event.
     api.issues = [_make_issue(number=12, title="Let's discuss", user="jcronq")]
     api.issue_thread_comments[12] = []
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     # A rando shows up.
     api.issue_thread_comments[12] = [
@@ -427,7 +456,9 @@ def test_untrusted_issue_comment_silent_but_marked_seen(
             "html_url": "https://example.com/c/8001",
         }
     ]
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert notes == [], "rando comment must not produce a note"
@@ -443,7 +474,9 @@ def test_trusted_member_issue_comment_emits_note(
     api = FakeAPI()
     api.issues = [_make_issue(number=12, title="Coordinate", user="jcronq")]
     api.issue_thread_comments[12] = []
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     api.issue_thread_comments[12] = [
         {
@@ -455,7 +488,9 @@ def test_trusted_member_issue_comment_emits_note(
             "html_url": "https://example.com/c/8002",
         }
     ]
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert len(notes) == 1
@@ -477,7 +512,9 @@ def test_pr_review_always_fires_regardless_of_association(
     api.review_comments[42] = []
     api.pr_conversation_comments[42] = []
     api.check_runs["deadbeef"] = []
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     api.reviews[42] = [
         {
@@ -490,7 +527,9 @@ def test_pr_review_always_fires_regardless_of_association(
             "html_url": "https://example.com/r/5005",
         }
     ]
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert len(notes) == 1
@@ -530,7 +569,9 @@ def test_legacy_state_primes_issues_silently_on_upgrade(
     api.issue_thread_comments[4] = []
     api.issue_thread_comments[5] = []
 
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
 
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert notes == [], (
@@ -547,7 +588,9 @@ def test_legacy_state_primes_issues_silently_on_upgrade(
         _make_issue(number=6, title="Brand new", user="jcronq"),
     ]
     api.issue_thread_comments[6] = []
-    gh_watcher.run(mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None)
+    gh_watcher.run(
+        mind_dir=mind_dir, state_path=state_path, api=api, log=lambda _: None
+    )
     notes = list((mind_dir / "inner" / "notes").glob("*.md"))
     assert len(notes) == 1
     assert "Brand new" in notes[0].read_text()

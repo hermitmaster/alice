@@ -66,11 +66,11 @@ _PI_TOOL_NAME_MAP: dict[str, Optional[str]] = {
     "Write": "write",
     "Edit": "edit",
     "Grep": "grep",
-    "Glob": "find",       # closest pi equivalent
+    "Glob": "find",  # closest pi equivalent
     "LS": "ls",
     "Ls": "ls",
-    "WebFetch": None,     # not available in pi
-    "WebSearch": None,    # not available in pi
+    "WebFetch": None,  # not available in pi
+    "WebSearch": None,  # not available in pi
     # Alice's speaking outbox is MCP-backed in Claude Code. Pi has no
     # MCP client, so PiKernel loads a tiny native extension with the same
     # tool name and TurnRunner handles the emitted tool call.
@@ -162,10 +162,12 @@ class PiKernel:
         # module reload of alice_pi.kernel.
         argv: list[str] = [
             _transport_mod.pi_bin(),
-            "--mode", "json",
-            "-p", prompt,
-            "--no-session",        # Alice owns session state; not pi
-            "--no-skills",         # disable directory-based discovery
+            "--mode",
+            "json",
+            "-p",
+            prompt,
+            "--no-session",  # Alice owns session state; not pi
+            "--no-skills",  # disable directory-based discovery
         ]
         # Skill discovery: explicit --skill <rendered_dir> beats
         # pi's auto-discovery from cwd's .claude/skills (which would

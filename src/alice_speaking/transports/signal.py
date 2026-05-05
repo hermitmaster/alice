@@ -233,9 +233,7 @@ class SignalTransport:
                 continue
             ctx.dedup.mark(env.timestamp)
             sender_name = ctx.address_book.display_name_for("signal", env.source)
-            await self._inbox.put(
-                SignalEvent(envelope=env, sender_name=sender_name)
-            )
+            await self._inbox.put(SignalEvent(envelope=env, sender_name=sender_name))
 
     async def _consume(self, ctx: DaemonContext) -> None:
         """Drain the inbox in same-sender bursts and run one turn per burst."""

@@ -70,9 +70,7 @@ def write_interval_atomic(path: pathlib.Path, seconds: int) -> None:
     os.replace(tmp, path)
 
 
-def read_interval(
-    path: pathlib.Path, default: int = BASE_INTERVAL_SECONDS
-) -> int:
+def read_interval(path: pathlib.Path, default: int = BASE_INTERVAL_SECONDS) -> int:
     """Read the supervisor's interval file with a sane default.
 
     Clamps to ``[BASE, MAX]`` so a corrupt file can't drive the

@@ -38,9 +38,7 @@ DEFAULT_THRESHOLD = 150_000
 # import graph stays clean.
 
 
-def should_compact(
-    usage: Optional[dict[str, Any]], threshold: int
-) -> bool:
+def should_compact(usage: Optional[dict[str, Any]], threshold: int) -> bool:
     """Return True when the post-turn context size exceeds the threshold.
 
     "Post-turn context" ≈ the prompt size on the *last* internal API call
@@ -88,9 +86,7 @@ def should_compact(
     return effective > threshold
 
 
-def build_summary_preamble(
-    summary_text: str, recent_turns: Iterable[Turn]
-) -> str:
+def build_summary_preamble(summary_text: str, recent_turns: Iterable[Turn]) -> str:
     """Compose the preamble injected at the start of a rolled session.
 
     Combines the compaction summary with the verbatim tail of the turn
@@ -233,9 +229,7 @@ class CompactionTrigger:
             return
 
         if not summary:
-            log.warning(
-                "compaction turn returned empty summary; rolling anyway"
-            )
+            log.warning("compaction turn returned empty summary; rolling anyway")
             summary = "(compaction produced no summary — session rolled on empty)"
 
         try:

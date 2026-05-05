@@ -17,12 +17,8 @@ from alice_speaking.transports import ChannelRef
 
 
 def test_resolve_recipient_name_lookup(address_book):
-    owner = ChannelRef(
-        transport="signal", address="+15555550100", durable=True
-    )
-    friend = ChannelRef(
-        transport="signal", address="+15555550101", durable=True
-    )
+    owner = ChannelRef(transport="signal", address="+15555550100", durable=True)
+    friend = ChannelRef(transport="signal", address="+15555550101", durable=True)
     assert messaging._resolve_recipient("owner", address_book) == owner
     # case-insensitive on display name + id
     assert messaging._resolve_recipient("Owner", address_book) == owner
@@ -30,19 +26,21 @@ def test_resolve_recipient_name_lookup(address_book):
 
 
 def test_resolve_recipient_e164_passthrough(address_book):
-    expected = ChannelRef(
-        transport="signal", address="+15555550100", durable=True
-    )
+    expected = ChannelRef(transport="signal", address="+15555550100", durable=True)
     assert messaging._resolve_recipient("+15555550100", address_book) == expected
     # Unknown E.164 still trusts the caller — daemon sends to whoever was asked.
-    assert messaging._resolve_recipient(
-        "+19999999999", address_book
-    ) == ChannelRef(transport="signal", address="+19999999999", durable=True)
+    assert messaging._resolve_recipient("+19999999999", address_book) == ChannelRef(
+        transport="signal", address="+19999999999", durable=True
+    )
 
 
 def test_resolve_recipient_self_alias(address_book):
-    assert messaging._resolve_recipient("self", address_book) == messaging.SELF_RECIPIENT
-    assert messaging._resolve_recipient("REPLY", address_book) == messaging.SELF_RECIPIENT
+    assert (
+        messaging._resolve_recipient("self", address_book) == messaging.SELF_RECIPIENT
+    )
+    assert (
+        messaging._resolve_recipient("REPLY", address_book) == messaging.SELF_RECIPIENT
+    )
 
 
 def test_resolve_recipient_unknown_returns_none(address_book):
@@ -79,9 +77,7 @@ def test_send_message_happy_path(cfg, address_book, tmp_path):
     send_tool = tools[0]
     assert send_tool.name == "send_message"
 
-    result = asyncio.run(
-        send_tool.handler({"recipient": "owner", "message": "hello"})
-    )
+    result = asyncio.run(send_tool.handler({"recipient": "owner", "message": "hello"}))
     assert result.get("isError") is not True
     assert sent == [
         (
@@ -97,14 +93,14 @@ def test_send_message_unknown_recipient(cfg, address_book, tmp_path):
         raise AssertionError("should not be called")
 
     tools = messaging.build(
-        cfg, address_book=address_book, sender=fake_sender,
+        cfg,
+        address_book=address_book,
+        sender=fake_sender,
         outbox_dir=tmp_path / "outbox",
     )
     send_tool = tools[0]
 
-    result = asyncio.run(
-        send_tool.handler({"recipient": "alice", "message": "x"})
-    )
+    result = asyncio.run(send_tool.handler({"recipient": "alice", "message": "x"}))
     assert result["isError"] is True
     assert "could not resolve recipient" in result["content"][0]["text"]
 
@@ -114,14 +110,14 @@ def test_send_message_empty_message(cfg, address_book, tmp_path):
         raise AssertionError("should not be called")
 
     tools = messaging.build(
-        cfg, address_book=address_book, sender=fake_sender,
+        cfg,
+        address_book=address_book,
+        sender=fake_sender,
         outbox_dir=tmp_path / "outbox",
     )
     send_tool = tools[0]
 
-    result = asyncio.run(
-        send_tool.handler({"recipient": "owner", "message": "   "})
-    )
+    result = asyncio.run(send_tool.handler({"recipient": "owner", "message": "   "}))
     assert result["isError"] is True
     assert "message must be a non-empty string" in result["content"][0]["text"]
 
@@ -131,14 +127,14 @@ def test_send_message_propagates_send_failure(cfg, address_book, tmp_path):
         raise RuntimeError("signal offline")
 
     tools = messaging.build(
-        cfg, address_book=address_book, sender=flaky_sender,
+        cfg,
+        address_book=address_book,
+        sender=flaky_sender,
         outbox_dir=tmp_path / "outbox",
     )
     send_tool = tools[0]
 
-    result = asyncio.run(
-        send_tool.handler({"recipient": "owner", "message": "ping"})
-    )
+    result = asyncio.run(send_tool.handler({"recipient": "owner", "message": "ping"}))
     assert result["isError"] is True
     assert "signal offline" in result["content"][0]["text"]
 
@@ -159,9 +155,7 @@ def test_send_message_via_signal_client(cfg, address_book):
 
     tools = messaging.build(cfg, address_book=address_book, signal=FakeSignal())
     send_tool = tools[0]
-    result = asyncio.run(
-        send_tool.handler({"recipient": "friend", "message": "hi k"})
-    )
+    result = asyncio.run(send_tool.handler({"recipient": "friend", "message": "hi k"}))
     assert result.get("isError") is not True
     assert sent == [("+15555550101", "hi k", None)]
 
@@ -231,7 +225,9 @@ def test_send_message_no_attachments_field(cfg, address_book, tmp_path):
         sent.append((recipient, message, attachments))
 
     tools = messaging.build(
-        cfg, address_book=address_book, sender=fake_sender,
+        cfg,
+        address_book=address_book,
+        sender=fake_sender,
         outbox_dir=tmp_path / "outbox",
     )
     send_tool = tools[0]
@@ -286,11 +282,14 @@ def test_send_message_empty_attachments_treated_as_none(cfg, address_book, tmp_p
 def test_send_message_non_list_attachments_errors(cfg, address_book, tmp_path):
     """A scalar (or any non-list) attachments value is a tool-input
     error — sender must not be invoked."""
+
     async def fake_sender(*_, **__) -> None:
         raise AssertionError("should not be called")
 
     tools = messaging.build(
-        cfg, address_book=address_book, sender=fake_sender,
+        cfg,
+        address_book=address_book,
+        sender=fake_sender,
         outbox_dir=tmp_path / "outbox",
     )
     send_tool = tools[0]
@@ -312,11 +311,14 @@ def test_send_message_attachments_with_non_string_entry_errors(
     cfg, address_book, tmp_path
 ):
     """A list with a non-string entry is also rejected."""
+
     async def fake_sender(*_, **__) -> None:
         raise AssertionError("should not be called")
 
     tools = messaging.build(
-        cfg, address_book=address_book, sender=fake_sender,
+        cfg,
+        address_book=address_book,
+        sender=fake_sender,
         outbox_dir=tmp_path / "outbox",
     )
     send_tool = tools[0]
@@ -347,7 +349,9 @@ def test_send_message_missing_attachment_path_errors(cfg, address_book, tmp_path
         sent.append((recipient, message, attachments))
 
     tools = messaging.build(
-        cfg, address_book=address_book, sender=fake_sender,
+        cfg,
+        address_book=address_book,
+        sender=fake_sender,
         outbox_dir=tmp_path / "outbox",
     )
     send_tool = tools[0]

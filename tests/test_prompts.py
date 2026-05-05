@@ -39,6 +39,7 @@ def test_loader_finds_default_template():
 
 def test_default_loader_lists_quick_template():
     from alice_prompts import list_prompts
+
     assert "thinking.quick" in list_prompts()
 
 
@@ -78,9 +79,7 @@ def test_override_wins_over_default(tmp_path: pathlib.Path):
     _write(defaults / "speaking" / "compact.md.j2", "DEFAULT")
     _write(override / "speaking" / "compact.md.j2", "OVERRIDE")
 
-    loader = PromptLoader(
-        defaults_path=defaults, override_path=override
-    )
+    loader = PromptLoader(defaults_path=defaults, override_path=override)
     assert loader.load("speaking.compact") == "OVERRIDE"
 
 
@@ -91,9 +90,7 @@ def test_override_missing_falls_back_to_default(tmp_path: pathlib.Path):
     override = tmp_path / "override-does-not-exist"
     _write(defaults / "speaking" / "compact.md.j2", "DEFAULT")
 
-    loader = PromptLoader(
-        defaults_path=defaults, override_path=override
-    )
+    loader = PromptLoader(defaults_path=defaults, override_path=override)
     assert loader.load("speaking.compact") == "DEFAULT"
 
 
@@ -113,9 +110,7 @@ def test_list_prompts_returns_sorted_names(tmp_path: pathlib.Path):
     defaults = tmp_path / "defaults"
     _write(defaults / "speaking" / "compact.md.j2", "x")
     _write(defaults / "thinking" / "quick.md.j2", "y")
-    _write(
-        defaults / "speaking" / "capability.signal.md.j2", "z"
-    )
+    _write(defaults / "speaking" / "capability.signal.md.j2", "z")
     loader = PromptLoader(defaults_path=defaults)
     assert loader.list_prompts() == [
         "speaking.capability.signal",
@@ -178,11 +173,7 @@ def test_capability_template_per_transport_exists():
         A2ATransport,
     ):
         # transport.name is the lowercase identifier the loader uses.
-        path = (
-            DEFAULTS_DIR
-            / "speaking"
-            / f"capability.{transport_cls.name}.md.j2"
-        )
+        path = DEFAULTS_DIR / "speaking" / f"capability.{transport_cls.name}.md.j2"
         assert path.is_file(), (
             f"capability template missing for transport "
             f"{transport_cls.name!r}: expected {path}"
@@ -389,9 +380,7 @@ def test_daemon_loader_uses_mind_override(tmp_path):
     mind_dir = tmp_path / "alice-mind"
     override_dir = mind_dir / ".alice" / "prompts" / "speaking"
     override_dir.mkdir(parents=True)
-    (override_dir / "compact.md.j2").write_text(
-        "OVERRIDE compact for {{ user.name }}"
-    )
+    (override_dir / "compact.md.j2").write_text("OVERRIDE compact for {{ user.name }}")
 
     state_dir = tmp_path / "state"
     state_dir.mkdir()
@@ -425,6 +414,7 @@ def test_mind_scaffold_includes_alice_prompts_dir():
     so freshly-scaffolded minds have the override path even when
     they don't customise anything yet."""
     import pathlib
+
     repo_root = pathlib.Path(__file__).resolve().parents[1]
     scaffold_prompts = repo_root / "templates" / "mind-scaffold" / ".alice" / "prompts"
     assert scaffold_prompts.is_dir(), (

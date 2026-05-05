@@ -68,9 +68,10 @@ async def handle_signal(ctx: DaemonContext, batch: list["SignalEvent"]) -> None:
 
     all_attachments = [a for ev in batch for a in ev.envelope.attachments]
     total_chars = sum(len(ev.envelope.body) for ev in batch)
-    inbound_preview = " ┃ ".join(
-        _short(ev.envelope.body, 200) for ev in batch if ev.envelope.body
-    ) or f"({len(all_attachments)} attachment(s), no text)"
+    inbound_preview = (
+        " ┃ ".join(_short(ev.envelope.body, 200) for ev in batch if ev.envelope.body)
+        or f"({len(all_attachments)} attachment(s), no text)"
+    )
 
     ctx.events.emit(
         "signal_turn_start",
@@ -162,11 +163,7 @@ async def handle_signal(ctx: DaemonContext, batch: list["SignalEvent"]) -> None:
                     sender_number=ev.envelope.source,
                     sender_name=sender_name,
                     inbound=ev.envelope.body,
-                    outbound=(
-                        ctx._turn_last_outbound
-                        if i == len(batch) - 1
-                        else None
-                    ),
+                    outbound=(ctx._turn_last_outbound if i == len(batch) - 1 else None),
                     error=error,
                 )
             )
@@ -442,6 +439,7 @@ async def handle_surface(ctx: DaemonContext, event: "SurfaceEvent") -> None:
         body=_short(body),
     )
     from alice_prompts import load as load_prompt
+
     prompt = load_prompt(
         "speaking.turn.surface",
         surface_id=path.name,
@@ -521,6 +519,7 @@ async def handle_emergency(ctx: DaemonContext, event: "EmergencyEvent") -> None:
     recipient = emergency_channel.address
 
     from alice_prompts import load as load_prompt
+
     prompt = load_prompt(
         "speaking.turn.emergency",
         emergency_id=path.name,
@@ -541,9 +540,7 @@ async def handle_emergency(ctx: DaemonContext, event: "EmergencyEvent") -> None:
     verdict = "unknown"
     action = "none"
     try:
-        await ctx._run_turn(
-            prompt, turn_id=turn_id, outbound_recipient=recipient
-        )
+        await ctx._run_turn(prompt, turn_id=turn_id, outbound_recipient=recipient)
         if ctx._turn_did_send:
             verdict = "voiced"
             action = f"sent to {recipient} via send_message (bypassed quiet hours)"

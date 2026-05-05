@@ -174,9 +174,7 @@ def test_cortex_index_calls_kernel_when_vault_present(
     assert len(rebuild_calls) == 1
 
 
-def test_cortex_index_skips_rebuild_when_fresh(
-    tmp_path: pathlib.Path, monkeypatch
-):
+def test_cortex_index_skips_rebuild_when_fresh(tmp_path: pathlib.Path, monkeypatch):
     vault = tmp_path / "cortex-memory"
     vault.mkdir()
 
@@ -201,9 +199,7 @@ def test_cortex_index_skips_rebuild_when_fresh(
     assert not rebuild_called
 
 
-def test_cortex_index_swallows_oserror_from_check(
-    tmp_path: pathlib.Path, monkeypatch
-):
+def test_cortex_index_swallows_oserror_from_check(tmp_path: pathlib.Path, monkeypatch):
     """Kernel can hit OSError on a malformed db. We log + skip,
     don't crash the daemon."""
     vault = tmp_path / "cortex-memory"

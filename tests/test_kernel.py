@@ -156,10 +156,17 @@ async def test_kernel_fires_handlers_for_each_block(patched_sdk, monkeypatch):
     seen: dict[str, list] = {"text": [], "tool": [], "thinking": [], "result": []}
 
     class SpyHandler(NullHandler):
-        async def on_text(self, text): seen["text"].append(text)
-        async def on_tool_use(self, name, input, id): seen["tool"].append(name)
-        async def on_thinking(self, text): seen["thinking"].append(text)
-        async def on_result(self, msg): seen["result"].append(msg.session_id)
+        async def on_text(self, text):
+            seen["text"].append(text)
+
+        async def on_tool_use(self, name, input, id):
+            seen["tool"].append(name)
+
+        async def on_thinking(self, text):
+            seen["thinking"].append(text)
+
+        async def on_result(self, msg):
+            seen["result"].append(msg.session_id)
 
     cap = CapturingEmitter()
     kernel = AnthropicKernel(cap)
@@ -184,7 +191,8 @@ async def test_kernel_silent_suppresses_emission_but_fires_handlers(
     fired: list[str] = []
 
     class H(NullHandler):
-        async def on_text(self, text): fired.append(text)
+        async def on_text(self, text):
+            fired.append(text)
 
     cap = CapturingEmitter()
     kernel = AnthropicKernel(cap, correlation_id="c", silent=True)
@@ -203,6 +211,7 @@ async def test_kernel_timeout_returns_error_result(patched_sdk, monkeypatch):
             yield None
 
     import alice_core.kernel.anthropic as k
+
     monkeypatch.setattr(k, "query", slow_query)
 
     cap = CapturingEmitter()
@@ -253,6 +262,7 @@ async def test_kernel_resume_passes_through_to_options(patched_sdk, monkeypatch)
         yield _FakeResultMessage(session_id="s")
 
     import alice_core.kernel.anthropic as k
+
     monkeypatch.setattr(k, "query", capturing_query)
 
     cap = CapturingEmitter()
@@ -269,9 +279,7 @@ async def test_kernel_resume_passes_through_to_options(patched_sdk, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_kernel_passes_append_system_prompt_to_options(
-    patched_sdk, monkeypatch
-):
+async def test_kernel_passes_append_system_prompt_to_options(patched_sdk, monkeypatch):
     """Plan 05 phase 2: KernelSpec.append_system_prompt threads through
     to ClaudeAgentOptions so the SDK adds it to its default system
     prompt. ``None`` (the default) keeps the kwarg out of the options
@@ -283,6 +291,7 @@ async def test_kernel_passes_append_system_prompt_to_options(
         yield _FakeResultMessage(session_id="s")
 
     import alice_core.kernel.anthropic as k
+
     monkeypatch.setattr(k, "query", capturing_query)
 
     cap = CapturingEmitter()
@@ -307,9 +316,7 @@ async def test_kernel_passes_append_system_prompt_to_options(
 
 
 @pytest.mark.asyncio
-async def test_kernel_omits_append_system_prompt_when_none(
-    patched_sdk, monkeypatch
-):
+async def test_kernel_omits_append_system_prompt_when_none(patched_sdk, monkeypatch):
     captured: dict[str, Any] = {}
 
     async def capturing_query(*, prompt, options):
@@ -317,6 +324,7 @@ async def test_kernel_omits_append_system_prompt_when_none(
         yield _FakeResultMessage(session_id="s")
 
     import alice_core.kernel.anthropic as k
+
     monkeypatch.setattr(k, "query", capturing_query)
 
     cap = CapturingEmitter()

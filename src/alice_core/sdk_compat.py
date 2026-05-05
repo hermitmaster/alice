@@ -38,7 +38,11 @@ def _short(obj: Any, cap: int = 2000) -> str:
     daemon uses 2000 (generous, fits most block contents); thinking uses
     400 (tight, keeps the log compact for mostly-internal traces).
     """
-    s = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False, default=str)
+    s = (
+        obj
+        if isinstance(obj, str)
+        else json.dumps(obj, ensure_ascii=False, default=str)
+    )
     return s if len(s) <= cap else s[: cap - 1] + "…"
 
 
@@ -54,9 +58,8 @@ def looks_like_missing_session(exc: BaseException) -> bool:
     if name in _SESSION_MISSING_EXC_NAMES:
         return True
     msg = str(exc).lower()
-    return (
-        "session" in msg
-        and ("not found" in msg or "no such" in msg or "does not exist" in msg)
+    return "session" in msg and (
+        "not found" in msg or "no such" in msg or "does not exist" in msg
     )
 
 

@@ -56,9 +56,7 @@ class SkillRegistry:
     # Construction
 
     @classmethod
-    def from_search_paths(
-        cls, search_paths: list[pathlib.Path]
-    ) -> "SkillRegistry":
+    def from_search_paths(cls, search_paths: list[pathlib.Path]) -> "SkillRegistry":
         """Walk each path, parse every SKILL.md, return a registry.
 
         Parse errors propagate (don't silently drop skills) — the

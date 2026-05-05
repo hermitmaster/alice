@@ -359,16 +359,16 @@ class AnthropicKernel:
 # settings the trace doesn't need to repeat per turn, version strings,
 # etc. Everything else flows through (and gets _short-truncated).
 _SYSTEM_DATA_NOISE = {
-    "type",                 # redundant with event="system"
-    "uuid",                 # per-event random
+    "type",  # redundant with event="system"
+    "uuid",  # per-event random
     "analytics_disabled",
     "fast_mode_state",
     "apiKeySource",
     "output_style",
-    "permissionMode",       # we control this
-    "agents",               # long preset list
-    "plugins",              # long preset list
-    "memory_paths",         # private filesystem paths
+    "permissionMode",  # we control this
+    "agents",  # long preset list
+    "plugins",  # long preset list
+    "memory_paths",  # private filesystem paths
 }
 
 
@@ -382,7 +382,8 @@ def _filter_system_data(data: dict, *, cap: int) -> dict:
             # Compact summary — full lists/dicts blow up log size.
             if isinstance(value, list):
                 out[key] = (
-                    value[:20] if all(isinstance(v, (str, int, float, bool)) for v in value)
+                    value[:20]
+                    if all(isinstance(v, (str, int, float, bool)) for v in value)
                     else f"[{len(value)} items]"
                 )
             else:

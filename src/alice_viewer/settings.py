@@ -26,7 +26,9 @@ class Paths:
 
 def load() -> Paths:
     home = pathlib.Path.home()
-    state = pathlib.Path(os.environ.get("ALICE_STATE", str(home / ".local/state/alice/worker")))
+    state = pathlib.Path(
+        os.environ.get("ALICE_STATE", str(home / ".local/state/alice/worker"))
+    )
     mind = pathlib.Path(os.environ.get("ALICE_MIND", str(home / "alice-mind")))
     return Paths(
         thinking_log=pathlib.Path(
@@ -36,7 +38,9 @@ def load() -> Paths:
             os.environ.get("ALICE_SPEAKING_LOG", str(state / "speaking.log"))
         ),
         turn_log=pathlib.Path(
-            os.environ.get("ALICE_TURN_LOG", str(mind / "inner/state/speaking-turns.jsonl"))
+            os.environ.get(
+                "ALICE_TURN_LOG", str(mind / "inner/state/speaking-turns.jsonl")
+            )
         ),
         mind_dir=mind,
         state_dir=state,

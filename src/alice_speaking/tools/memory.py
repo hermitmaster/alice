@@ -51,9 +51,7 @@ def _err(text: str) -> dict[str, Any]:
 _ROOTS = ("cortex-memory", "memory")
 
 
-def build(
-    cfg: Config, *, personae: Personae | None = None
-) -> list[SdkMcpTool[Any]]:
+def build(cfg: Config, *, personae: Personae | None = None) -> list[SdkMcpTool[Any]]:
     p = personae or placeholder_personae()
     agent = p.agent.name
     mind_dir = cfg.mind_dir
@@ -149,7 +147,10 @@ def _first_nonempty(path: Path, cap: int = 120) -> str:
 def _truncate(body: str, cap: int, path: Path) -> str:
     if len(body) <= cap:
         return body
-    return body[:cap] + f"\n\n…[truncated at {cap}; file is {len(body)} chars; read {path} directly for full]"
+    return (
+        body[:cap]
+        + f"\n\n…[truncated at {cap}; file is {len(body)} chars; read {path} directly for full]"
+    )
 
 
 _FRONTMATTER_RE = re.compile(r"^(---\n)(.*?)(\n---\n)", re.DOTALL)
@@ -182,7 +183,7 @@ def _bump_access(path: Path) -> None:
                 cur_count = 0
             break
     new_fm = _update_fm_field(new_fm, "access_count", str(cur_count + 1))
-    new_text = m.group(1) + new_fm + m.group(3) + text[m.end():]
+    new_text = m.group(1) + new_fm + m.group(3) + text[m.end() :]
     try:
         path.write_text(new_text)
     except OSError:

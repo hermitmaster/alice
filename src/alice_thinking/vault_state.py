@@ -237,9 +237,7 @@ def snapshot(
 
     has_inbox = _has_pending_inbox(mind)
     has_corpus, corpus_age = _has_recent_research_corpus(mind, now=now)
-    consecutive_b = _consecutive_count(
-        recent, stage="B", require_did_work_false=True
-    )
+    consecutive_b = _consecutive_count(recent, stage="B", require_did_work_false=True)
     consecutive_null_c = _consecutive_count(
         recent, stage="C", require_did_work_false=True
     )

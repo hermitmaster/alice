@@ -158,15 +158,12 @@ def _coerce_harness(value: Any, field_name: str) -> HarnessName | None:
     normalized = _HARNESS_ALIASES.get(raw.strip().lower())
     if normalized is None:
         raise ModelConfigError(
-            f"{field_name} = {raw!r}; "
-            f"expected one of {sorted(_VALID_HARNESSES)}"
+            f"{field_name} = {raw!r}; expected one of {sorted(_VALID_HARNESSES)}"
         )
     return normalized
 
 
-def _backend_defaults_from_dict(
-    name: str, data: Mapping[str, Any]
-) -> BackendDefaults:
+def _backend_defaults_from_dict(name: str, data: Mapping[str, Any]) -> BackendDefaults:
     if name not in _VALID_BACKENDS:
         raise ModelConfigError(
             f"unknown backend {name!r} in 'backends:' block; "
@@ -241,8 +238,7 @@ def from_mapping(data: Mapping[str, Any]) -> ModelConfig:
     for name, value in backends_raw.items():
         if not isinstance(value, Mapping):
             raise ModelConfigError(
-                f"backends.{name} must be a mapping "
-                f"(got {type(value).__name__})"
+                f"backends.{name} must be a mapping (got {type(value).__name__})"
             )
         backends[str(name)] = _backend_defaults_from_dict(str(name), value)
 

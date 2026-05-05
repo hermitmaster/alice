@@ -154,7 +154,9 @@ async def test_pi_kernel_emits_turn_id_when_correlation_id_set(fake_pi_env) -> N
 
 
 @pytest.mark.asyncio
-async def test_pi_kernel_silent_suppresses_events_but_runs_handlers(fake_pi_env) -> None:
+async def test_pi_kernel_silent_suppresses_events_but_runs_handlers(
+    fake_pi_env,
+) -> None:
     fake_pi_env(
         [
             '{"type":"session","version":3,"id":"s","cwd":"/tmp"}',
@@ -194,9 +196,7 @@ def test_pi_kernel_argv_normalizes_model_and_threads_thinking() -> None:
     bare = kernel._build_argv("hi", KernelSpec(model="gpt-5.3-codex"))
     assert "openai-codex/gpt-5.3-codex" in bare
 
-    explicit = kernel._build_argv(
-        "hi", KernelSpec(model="openai-codex/gpt-5.3-codex")
-    )
+    explicit = kernel._build_argv("hi", KernelSpec(model="openai-codex/gpt-5.3-codex"))
     # Already prefixed — leave untouched.
     assert "openai-codex/gpt-5.3-codex" in explicit
     assert "openai-codex/openai-codex/gpt-5.3-codex" not in explicit

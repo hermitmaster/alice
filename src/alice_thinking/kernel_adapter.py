@@ -48,6 +48,7 @@ async def run_wake(
     """
     if backend is None:
         from alice_core.config.model import BackendSpec
+
         backend = BackendSpec(backend="subscription")
 
     wake_id = f"wake-{int(time.time())}"

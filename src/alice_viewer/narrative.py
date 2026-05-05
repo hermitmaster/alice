@@ -52,8 +52,12 @@ def build_digest(paths: Paths, window_seconds: int, max_events: int) -> dict:
     wakes = [w for w in aggregators.group_wakes(all_events) if w.start_ts >= cutoff]
     turns = [t for t in aggregators.group_turns(all_events) if t.start_ts >= cutoff]
 
-    surfaces = [e for e in in_window if e.kind in ("surface_pending", "surface_resolved")]
-    emergencies = [e for e in in_window if e.kind in ("emergency_pending", "emergency_resolved")]
+    surfaces = [
+        e for e in in_window if e.kind in ("surface_pending", "surface_resolved")
+    ]
+    emergencies = [
+        e for e in in_window if e.kind in ("emergency_pending", "emergency_resolved")
+    ]
     notes = [e for e in in_window if e.kind in ("note_pending", "note_consumed")]
     thoughts = [e for e in in_window if e.kind == "thought_written"]
 
@@ -180,7 +184,10 @@ async def stream_narrative(
     or {"type": "error", "message": "..."}."""
     auth = _ensure_auth()
     if auth.mode == "none":
-        yield {"type": "error", "message": "no Claude credentials in env or alice.env (set CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)"}
+        yield {
+            "type": "error",
+            "message": "no Claude credentials in env or alice.env (set CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)",
+        }
         return
 
     try:
@@ -219,7 +226,10 @@ async def stream_narrative(
                         "session_id": msg.session_id,
                     }
                     if msg.is_error:
-                        yield {"type": "error", "message": msg.result or "claude returned is_error"}
+                        yield {
+                            "type": "error",
+                            "message": msg.result or "claude returned is_error",
+                        }
                         return
     except asyncio.TimeoutError:
         yield {"type": "error", "message": f"timed out after {max_seconds}s"}
@@ -251,11 +261,11 @@ def window_from_label(label: str) -> tuple[int, str]:
 
 # bucket_seconds chosen so any window has ~6-30 buckets (a tractable merge input).
 WINDOW_BUCKET_SECONDS = {
-    "1h":   600,          # 10-min buckets → 6
-    "6h":   1800,         # 30-min buckets → 12
-    "24h":  3600,         # 1-hour buckets → 24
-    "7d":   6 * 3600,     # 6-hour buckets → 28
-    "30d":  86400,        # 1-day buckets → 30
+    "1h": 600,  # 10-min buckets → 6
+    "6h": 1800,  # 30-min buckets → 12
+    "24h": 3600,  # 1-hour buckets → 24
+    "7d": 6 * 3600,  # 6-hour buckets → 28
+    "30d": 86400,  # 1-day buckets → 30
 }
 
 MAX_CONCURRENT_BUCKET_GENERATIONS = 4
@@ -282,11 +292,14 @@ class BucketSlot:
         return self.start <= now_ts < self.end
 
 
-def build_buckets(paths: Paths, window_seconds: int, window_label: str,
-                  now_ts: float | None = None) -> list[BucketSlot]:
+def build_buckets(
+    paths: Paths, window_seconds: int, window_label: str, now_ts: float | None = None
+) -> list[BucketSlot]:
     now_ts = now_ts or time.time()
     bucket_seconds = bucket_seconds_for(window_label)
-    end = align_down(now_ts, bucket_seconds) + bucket_seconds   # include the current open bucket
+    end = (
+        align_down(now_ts, bucket_seconds) + bucket_seconds
+    )  # include the current open bucket
     start = align_down(now_ts - window_seconds, bucket_seconds)
 
     all_events = sources.load_all(paths)
@@ -376,11 +389,15 @@ async def _summarize_bucket(slot: BucketSlot) -> bucket_cache.BucketSummary:
     )
 
 
-async def _run_once(prompt: str, *, max_output_tokens_hint: int = 500) -> tuple[str, float]:
+async def _run_once(
+    prompt: str, *, max_output_tokens_hint: int = 500
+) -> tuple[str, float]:
     """Non-streaming LLM call — used for per-bucket summaries."""
     auth = _ensure_auth()
     if auth.mode == "none":
-        raise RuntimeError("no Claude credentials (set CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)")
+        raise RuntimeError(
+            "no Claude credentials (set CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)"
+        )
     from claude_agent_sdk import (
         AssistantMessage,
         ClaudeAgentOptions,
@@ -388,6 +405,7 @@ async def _run_once(prompt: str, *, max_output_tokens_hint: int = 500) -> tuple[
         TextBlock,
         query,
     )
+
     options = ClaudeAgentOptions(
         model=BUCKET_MODEL,
         allowed_tools=[],
@@ -423,10 +441,14 @@ async def ensure_bucket_cache(
 
     for idx, slot in enumerate(slots):
         force = slot.is_open(now_ts)
-        cached = None if force else bucket_cache.read(
-            bucket_seconds=slot.end - slot.start,
-            bucket_start=slot.start,
-            content_hash=slot.content_hash,
+        cached = (
+            None
+            if force
+            else bucket_cache.read(
+                bucket_seconds=slot.end - slot.start,
+                bucket_start=slot.start,
+                content_hash=slot.content_hash,
+            )
         )
         if cached is not None:
             results[idx] = cached
@@ -434,8 +456,13 @@ async def ensure_bucket_cache(
             to_generate.append((idx, slot))
 
     if progress_cb:
-        await progress_cb({"cached": sum(1 for r in results if r is not None),
-                           "total": len(slots), "pending": len(to_generate)})
+        await progress_cb(
+            {
+                "cached": sum(1 for r in results if r is not None),
+                "total": len(slots),
+                "pending": len(to_generate),
+            }
+        )
 
     sem = asyncio.Semaphore(MAX_CONCURRENT_BUCKET_GENERATIONS)
 
@@ -451,7 +478,9 @@ async def ensure_bucket_cache(
             results[idx] = summary
             if progress_cb:
                 done = sum(1 for r in results if r is not None)
-                await progress_cb({"cached": done, "total": len(slots), "pending": len(slots) - done})
+                await progress_cb(
+                    {"cached": done, "total": len(slots), "pending": len(slots) - done}
+                )
 
     await asyncio.gather(*(_one(i, s) for i, s in to_generate))
     return [r for r in results if r is not None]

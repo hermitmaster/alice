@@ -204,9 +204,7 @@ class SignalRPC:
 
     # -- internals -------------------------------------------------------------
 
-    async def _rpc(
-        self, method: str, params: dict, *, request_id: str = "rpc"
-    ) -> dict:
+    async def _rpc(self, method: str, params: dict, *, request_id: str = "rpc") -> dict:
         body = {
             "jsonrpc": "2.0",
             "method": method,

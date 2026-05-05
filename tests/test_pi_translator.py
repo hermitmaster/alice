@@ -100,9 +100,7 @@ def test_text_deltas_accumulate_and_emit_once_on_text_end() -> None:
     # One handler call, one event emission — both with the full
     # block content rather than per-delta chunks.
     assert fired == ["Hello world"]
-    emitted_texts = [
-        f.get("text") for name, f in recorded if name == "assistant_text"
-    ]
+    emitted_texts = [f.get("text") for name, f in recorded if name == "assistant_text"]
     assert emitted_texts == ["Hello world"]
     assert t.to_kernel_result().text == "Hello world"
 

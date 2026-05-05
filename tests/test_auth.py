@@ -148,9 +148,7 @@ def test_api_mode_via_mode_hint_clears_bedrock(
     assert os.environ.get("AWS_REGION") is None
 
 
-def test_no_creds_no_hint_returns_none_mode(
-    clean_env, empty_env_file
-) -> None:
+def test_no_creds_no_hint_returns_none_mode(clean_env, empty_env_file) -> None:
     auth = ensure_auth_env(empty_env_file)
     assert auth.mode == "none"
 
@@ -161,9 +159,7 @@ def test_find_auth_env_with_mode_hint_does_not_mutate_env(
     """``find_auth_env`` reports what would happen but doesn't mutate
     os.environ — only ``ensure_auth_env`` does. Pinning this so future
     refactors don't accidentally cross the wires."""
-    auth = find_auth_env(
-        empty_env_file, mode_hint="bedrock", aws_region="us-east-1"
-    )
+    auth = find_auth_env(empty_env_file, mode_hint="bedrock", aws_region="us-east-1")
     assert auth.mode == "bedrock"
     assert auth.aws_region == "us-east-1"
     import os

@@ -61,7 +61,9 @@ def test_run_wake_passes_system_prompt_to_kernel(monkeypatch, tmp_path) -> None:
         error = None
 
     class _FakeKernel:
-        async def run(self, prompt: str, spec: Any, handlers: Any = None) -> _FakeResult:
+        async def run(
+            self, prompt: str, spec: Any, handlers: Any = None
+        ) -> _FakeResult:
             captured["spec"] = spec
             captured["prompt"] = prompt
             return _FakeResult()
@@ -69,14 +71,14 @@ def test_run_wake_passes_system_prompt_to_kernel(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(ka, "make_kernel", lambda *a, **kw: _FakeKernel())
 
     ctx = _make_ctx(tmp_path, system_prompt="You are Eve. Talk to Jordan.")
-    rc = asyncio.run(ka.run_wake(ctx=ctx, mode=ActiveMode(), emitter=_CapturingEmitter()))
+    rc = asyncio.run(
+        ka.run_wake(ctx=ctx, mode=ActiveMode(), emitter=_CapturingEmitter())
+    )
     assert rc == 0
     assert captured["spec"].append_system_prompt == "You are Eve. Talk to Jordan."
 
 
-def test_run_wake_with_empty_system_prompt_passes_none(
-    monkeypatch, tmp_path
-) -> None:
+def test_run_wake_with_empty_system_prompt_passes_none(monkeypatch, tmp_path) -> None:
     """Empty system_prompt → kernel sees None so it skips the
     system_prompt kwarg entirely (back-compat with callers that
     don't render personae)."""
@@ -86,7 +88,9 @@ def test_run_wake_with_empty_system_prompt_passes_none(
         error = None
 
     class _FakeKernel:
-        async def run(self, prompt: str, spec: Any, handlers: Any = None) -> _FakeResult:
+        async def run(
+            self, prompt: str, spec: Any, handlers: Any = None
+        ) -> _FakeResult:
             captured["spec"] = spec
             return _FakeResult()
 
@@ -106,7 +110,9 @@ def test_run_wake_emits_mode_in_envelope_events(monkeypatch, tmp_path) -> None:
         error = None
 
     class _FakeKernel:
-        async def run(self, prompt: str, spec: Any, handlers: Any = None) -> _FakeResult:
+        async def run(
+            self, prompt: str, spec: Any, handlers: Any = None
+        ) -> _FakeResult:
             return _FakeResult()
 
     monkeypatch.setattr(ka, "make_kernel", lambda *a, **kw: _FakeKernel())

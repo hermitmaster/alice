@@ -45,39 +45,41 @@ def mind(tmp_path: pathlib.Path) -> pathlib.Path:
     _write_skill(
         skills,
         "log-meal",
-        '---\n'
-        'name: log-meal\n'
+        "---\n"
+        "name: log-meal\n"
         # The colon-inside-quoted-string case that breaks strict YAML;
         # parsed leniently by alice_skills, must be re-emitted strict.
         'description: Use when {{ user.name }} reports eating ("lunch: X").\n'
-        'scope: speaking\n'
-        '---\n'
-        '# log-meal\n\nProcedure body for {{ user.name }}.\n',
+        "scope: speaking\n"
+        "---\n"
+        "# log-meal\n\nProcedure body for {{ user.name }}.\n",
     )
     _write_skill(
         skills,
         "groom-vault",
-        '---\n'
-        'name: groom-vault\n'
-        'description: Manage {{ agent.name }} vault.\n'
-        'scope: thinking\n'
-        '---\n'
-        '# groom-vault\n\nThinking-side body.\n',
+        "---\n"
+        "name: groom-vault\n"
+        "description: Manage {{ agent.name }} vault.\n"
+        "scope: thinking\n"
+        "---\n"
+        "# groom-vault\n\nThinking-side body.\n",
     )
     _write_skill(
         skills,
         "shared-thing",
-        '---\n'
-        'name: shared-thing\n'
-        'description: Useful for both hemispheres.\n'
-        'scope: both\n'
-        '---\n'
-        '# shared-thing\n\nNo Jinja here.\n',
+        "---\n"
+        "name: shared-thing\n"
+        "description: Useful for both hemispheres.\n"
+        "scope: both\n"
+        "---\n"
+        "# shared-thing\n\nNo Jinja here.\n",
     )
     return mind
 
 
-def test_render_filters_by_hemisphere(mind: pathlib.Path, tmp_path: pathlib.Path) -> None:
+def test_render_filters_by_hemisphere(
+    mind: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
     """Speaking renders log-meal + shared-thing; thinking renders
     groom-vault + shared-thing. The "both" scope appears in both."""
     registry = SkillRegistry.from_mind(mind, include_defaults=False)
@@ -116,7 +118,9 @@ def test_render_emits_strict_yaml_frontmatter(
         personae=_personae(),
     )
 
-    rendered_text = (target / ".claude" / "skills" / "log-meal" / "SKILL.md").read_text()
+    rendered_text = (
+        target / ".claude" / "skills" / "log-meal" / "SKILL.md"
+    ).read_text()
     assert rendered_text.startswith("---\n")
 
     end = rendered_text.index("\n---\n", 4)
@@ -173,18 +177,14 @@ def test_render_copies_claude_md_when_provided(
     assert "Mind-level instructions." in (target / "CLAUDE.md").read_text()
 
 
-def test_render_clears_stale_target(
-    mind: pathlib.Path, tmp_path: pathlib.Path
-) -> None:
+def test_render_clears_stale_target(mind: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """A second render with different scoping must not leave behind
     skills from the first run."""
     target = tmp_path / "state" / "speaking"
     registry = SkillRegistry.from_mind(mind, include_defaults=False)
 
     # First render: filter by "both" — gets log-meal, groom-vault, shared-thing.
-    render_to_disk(
-        registry, hemisphere="both", target_dir=target, personae=_personae()
-    )
+    render_to_disk(registry, hemisphere="both", target_dir=target, personae=_personae())
     assert (target / ".claude" / "skills" / "groom-vault").exists()
 
     # Second render: speaking only — groom-vault must disappear.
@@ -203,8 +203,8 @@ def test_render_without_personae_leaves_jinja_unrendered(
     quotes them, so pi/SDK still parse the file."""
     target = tmp_path / "state" / "speaking"
     registry = SkillRegistry.from_mind(mind, include_defaults=False)
-    render_to_disk(
-        registry, hemisphere="speaking", target_dir=target, personae=None
-    )
-    rendered_text = (target / ".claude" / "skills" / "log-meal" / "SKILL.md").read_text()
+    render_to_disk(registry, hemisphere="speaking", target_dir=target, personae=None)
+    rendered_text = (
+        target / ".claude" / "skills" / "log-meal" / "SKILL.md"
+    ).read_text()
     assert "{{ user.name }}" in rendered_text

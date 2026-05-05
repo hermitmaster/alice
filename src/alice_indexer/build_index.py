@@ -143,7 +143,9 @@ def needs_rebuild(vault: Path, db_path: Path, max_stale_seconds: int = 86400) ->
     return vault_mtime(vault) > db_mtime
 
 
-def slug_for(path: Path, vault: Path, colliding_stems: frozenset[str] = frozenset()) -> str:
+def slug_for(
+    path: Path, vault: Path, colliding_stems: frozenset[str] = frozenset()
+) -> str:
     """Slug = filename stem; qualified by folder when stems collide.
 
     Filenames are typically unique across a vault, so the bare stem suffices
@@ -226,7 +228,9 @@ def collect_notes(vault: Path) -> list[dict]:
     return records
 
 
-def build_resolution_maps(records: list[dict]) -> tuple[dict[str, dict], dict[str, dict], dict[str, dict]]:
+def build_resolution_maps(
+    records: list[dict],
+) -> tuple[dict[str, dict], dict[str, dict], dict[str, dict]]:
     """Build slug → record, alias → record, title → record maps."""
     by_slug: dict[str, dict] = {}
     by_alias: dict[str, dict] = {}

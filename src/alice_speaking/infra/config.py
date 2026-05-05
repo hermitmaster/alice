@@ -189,10 +189,14 @@ def load() -> Config:
     anthropic_api_key = from_any("ANTHROPIC_API_KEY", "") or ""
     anthropic_auth_token = from_any("ANTHROPIC_AUTH_TOKEN", "") or ""
     allowed = _parse_allowed_senders(from_any("ALLOWED_SENDERS", "") or "")
-    work_dir = pathlib.Path(from_any("WORK_DIR", str(DEFAULT_MIND_DIR)) or str(DEFAULT_MIND_DIR))
+    work_dir = pathlib.Path(
+        from_any("WORK_DIR", str(DEFAULT_MIND_DIR)) or str(DEFAULT_MIND_DIR)
+    )
 
     mind_dir = pathlib.Path(from_any("ALICE_MIND_DIR", str(work_dir)) or str(work_dir))
-    state_dir = pathlib.Path(from_any("STATE_DIR", str(DEFAULT_STATE_DIR)) or str(DEFAULT_STATE_DIR))
+    state_dir = pathlib.Path(
+        from_any("STATE_DIR", str(DEFAULT_STATE_DIR)) or str(DEFAULT_STATE_DIR)
+    )
     signal_log = pathlib.Path(
         from_any("SIGNAL_LOG_FILE")
         or str(state_dir.parent / "daemon" / "signal-daemon.log")
@@ -210,8 +214,7 @@ def load() -> Config:
     cli_enabled_raw = (from_any("ALICE_CLI_ENABLED", "1") or "1").strip().lower()
     cli_enabled = cli_enabled_raw not in {"0", "false", "no", "off", ""}
     cli_socket_path = pathlib.Path(
-        from_any("ALICE_CLI_SOCKET", str(DEFAULT_CLI_SOCKET))
-        or str(DEFAULT_CLI_SOCKET)
+        from_any("ALICE_CLI_SOCKET", str(DEFAULT_CLI_SOCKET)) or str(DEFAULT_CLI_SOCKET)
     )
 
     principals_path = pathlib.Path(

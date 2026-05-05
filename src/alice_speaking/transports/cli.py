@@ -324,8 +324,7 @@ class CLITransport:
                     {
                         "type": "error",
                         "message": (
-                            f"unauthorized: uid {peer_uid} is not in the "
-                            f"address book"
+                            f"unauthorized: uid {peer_uid} is not in the address book"
                         ),
                     },
                 )

@@ -183,6 +183,4 @@ async def run_startup_phase(registry: SourceRegistry, ctx) -> None:
         try:
             await source.run_once(ctx)
         except Exception:  # noqa: BLE001
-            log.exception(
-                "startup source %s failed; continuing", source.name
-            )
+            log.exception("startup source %s failed; continuing", source.name)

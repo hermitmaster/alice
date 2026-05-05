@@ -49,9 +49,7 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         # able to read narrative even with a half-edited personae.yml.
         personae = placeholder_personae()
 
-    app = FastAPI(
-        title=f"{personae.agent.name} Viewer", version="0.1.0"
-    )
+    app = FastAPI(title=f"{personae.agent.name} Viewer", version="0.1.0")
     app.state.paths = resolved_paths
     app.state.personae = personae
     # Plan 06 Phase 4: load mind/config/model.yml so the viewer's
@@ -104,7 +102,9 @@ def create_app(paths: Paths | None = None) -> FastAPI:
     # Views
 
     @app.get("/", response_class=HTMLResponse)
-    async def timeline(request: Request, limit: int = 50, hemisphere: str | None = None):
+    async def timeline(
+        request: Request, limit: int = 50, hemisphere: str | None = None
+    ):
         """Timeline of *runs* — one row per thinking wake or speaking turn.
 
         A run is a contiguous span of work. Thinking runs go from
@@ -201,7 +201,9 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         wakes.reverse()
         total = len(wakes)
         page = wakes[:limit]
-        summaries = {w.wake_id: aggregators.summarize_wake(w, run_summary) for w in page}
+        summaries = {
+            w.wake_id: aggregators.summarize_wake(w, run_summary) for w in page
+        }
         return templates.TemplateResponse(
             request,
             "wakes.html",
@@ -229,7 +231,9 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         wakes = aggregators.group_wakes(events)
         wakes.reverse()
         page = wakes[offset : offset + limit]
-        summaries = {w.wake_id: aggregators.summarize_wake(w, run_summary) for w in page}
+        summaries = {
+            w.wake_id: aggregators.summarize_wake(w, run_summary) for w in page
+        }
         next_offset = offset + limit
         return templates.TemplateResponse(
             request,
@@ -253,7 +257,9 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         wake = next((w for w in wakes if w.wake_id == wake_id), None)
         summary = aggregators.summarize_wake(wake, run_summary) if wake else None
         thought = (
-            sources.find_wake_thought(events, wake.start_ts, wake.end_ts) if wake else None
+            sources.find_wake_thought(events, wake.start_ts, wake.end_ts)
+            if wake
+            else None
         )
         return templates.TemplateResponse(
             request,
@@ -358,7 +364,7 @@ def create_app(paths: Paths | None = None) -> FastAPI:
     async def interactions(
         request: Request,
         limit: int = 100,
-        kind: str | None = None,   # "signal" | "surface" | "emergency" | None
+        kind: str | None = None,  # "signal" | "surface" | "emergency" | None
         sender: str | None = None,  # filter by sender name (signal turns)
     ):
         p: Paths = app.state.paths
@@ -459,6 +465,7 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         # Final merge cache is keyed by the concatenation of bucket content hashes.
         merge_hash = "-".join(f"{s.start}:{s.content_hash}" for s in slots)
         import hashlib as _h
+
         merge_ckey = _h.sha256(merge_hash.encode()).hexdigest()[:16]
         cached_merge = None if nocache else narrative_mod.cache_get(merge_ckey)
 
@@ -512,7 +519,10 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                     yield {"event": "bucket_progress", "data": json.dumps(info)}
                 summaries = await fill_task
             except Exception as exc:  # noqa: BLE001
-                yield {"event": "error", "data": json.dumps({"message": f"bucket fill failed: {exc}"})}
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"message": f"bucket fill failed: {exc}"}),
+                }
                 return
 
             # Merge step — streamed.
@@ -527,7 +537,10 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                 elif ev["type"] == "result":
                     yield {"event": "result", "data": json.dumps(ev)}
                 elif ev["type"] == "error":
-                    yield {"event": "error", "data": json.dumps({"message": ev["message"]})}
+                    yield {
+                        "event": "error",
+                        "data": json.dumps({"message": ev["message"]}),
+                    }
                     return
                 elif ev["type"] == "done":
                     narrative_mod.cache_put(merge_ckey, "".join(full_text))
@@ -907,7 +920,9 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                 if n.ts == 0 or n.ts >= cutoff:
                     kept_nodes.append(n)
                     kept_ids.add(n.id)
-            kept_edges = [e for e in edges if e.source in kept_ids and e.target in kept_ids]
+            kept_edges = [
+                e for e in edges if e.source in kept_ids and e.target in kept_ids
+            ]
             nodes, edges = kept_nodes, kept_edges
 
         return JSONResponse(
@@ -923,7 +938,8 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                     for n in nodes
                 ],
                 "edges": [
-                    {"source": e.source, "target": e.target, "kind": e.kind} for e in edges
+                    {"source": e.source, "target": e.target, "kind": e.kind}
+                    for e in edges
                 ],
             }
         )
@@ -943,12 +959,14 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         # "memory/sources/bar/baz". Rejoin with .md and ensure the result
         # stays inside mind/.
         if id.startswith("unresolved::"):
-            return JSONResponse({
-                "id": id,
-                "label": id.split("::", 1)[1],
-                "body": "",
-                "unresolved": True,
-            })
+            return JSONResponse(
+                {
+                    "id": id,
+                    "label": id.split("::", 1)[1],
+                    "body": "",
+                    "unresolved": True,
+                }
+            )
         candidate = (p.mind_dir / f"{id}.md").resolve()
         try:
             candidate.relative_to(p.mind_dir.resolve())
@@ -958,15 +976,17 @@ def create_app(paths: Paths | None = None) -> FastAPI:
             return JSONResponse({"error": "not found", "id": id}, status_code=404)
         body = candidate.read_text(errors="replace")
         st = candidate.stat()
-        return JSONResponse({
-            "id": id,
-            "path": str(candidate),
-            "rel_path": str(candidate.relative_to(p.mind_dir)),
-            "label": candidate.stem,
-            "body": body,
-            "size": st.st_size,
-            "mtime": st.st_mtime,
-        })
+        return JSONResponse(
+            {
+                "id": id,
+                "path": str(candidate),
+                "rel_path": str(candidate.relative_to(p.mind_dir)),
+                "label": candidate.stem,
+                "body": body,
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+            }
+        )
 
     @app.get("/api/state")
     async def api_state() -> JSONResponse:
@@ -1004,6 +1024,7 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         """
         p: Paths = app.state.paths
         last_sig = sources.load_all_signature(p)
+
         # Emit one initial change so consumers can do a first refetch on
         # connect — handy if the page was rendered slightly stale by a
         # request that beat the latest log append. Cheap and idempotent.
@@ -1037,8 +1058,12 @@ def create_app(paths: Paths | None = None) -> FastAPI:
 
         # Start from current end-of-file so we only ship new events.
         offsets = {
-            thinking_path: thinking_path.stat().st_size if thinking_path.is_file() else 0,
-            speaking_path: speaking_path.stat().st_size if speaking_path.is_file() else 0,
+            thinking_path: thinking_path.stat().st_size
+            if thinking_path.is_file()
+            else 0,
+            speaking_path: speaking_path.stat().st_size
+            if speaking_path.is_file()
+            else 0,
         }
 
         async def gen():

@@ -61,9 +61,7 @@ class SurfaceScanStartup:
             return 0
         try:
             return sum(
-                1
-                for path in dated_dir.glob("*.md")
-                if not path.name.startswith(".")
+                1 for path in dated_dir.glob("*.md") if not path.name.startswith(".")
             )
         except OSError as exc:
             log.warning("surface scan error in %s: %s", dated_dir, exc)

@@ -347,7 +347,11 @@ def rebuild(
     # --- Update matched entries ---------------------------------------
     for fresh_cid, stable_id in fresh_to_stable.items():
         entry = entries[stable_id]
-        if entry.get("created") == today_iso and entry.get("birth_size") == entry.get("current_size") and stable_id not in matched_stable:
+        if (
+            entry.get("created") == today_iso
+            and entry.get("birth_size") == entry.get("current_size")
+            and stable_id not in matched_stable
+        ):
             # Just-minted entry — already correct.
             continue
         if stable_id not in matched_stable:

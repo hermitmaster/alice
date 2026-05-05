@@ -29,14 +29,7 @@ from alice_indexer.yaml_lite import extract_wikilinks, split_frontmatter
 
 
 def test_split_frontmatter_extracts_metadata():
-    body = (
-        "---\n"
-        "title: My Note\n"
-        "tags: [alpha, beta]\n"
-        "---\n"
-        "\n"
-        "Body content here."
-    )
+    body = "---\ntitle: My Note\ntags: [alpha, beta]\n---\n\nBody content here."
     meta, content = split_frontmatter(body)
     assert meta["title"] == "My Note"
     assert meta["tags"] == ["alpha", "beta"]
@@ -67,13 +60,7 @@ def test_extract_wikilinks_finds_targets():
 def _write_note(path: pathlib.Path, *, title: str, body: str = "Hello.") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "---\n"
-        f"title: {title}\n"
-        "type: reference\n"
-        "status: open\n"
-        "tags: []\n"
-        "---\n\n"
-        f"{body}\n"
+        f"---\ntitle: {title}\ntype: reference\nstatus: open\ntags: []\n---\n\n{body}\n"
     )
 
 
@@ -91,17 +78,14 @@ def test_build_creates_expected_schema(tmp_path: pathlib.Path):
     try:
         tables = {
             row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
     finally:
         conn.close()
 
     for required in ("notes", "links", "meta", "note_metrics"):
         assert required in tables, (
-            f"missing core table {required!r}; stats={stats}, "
-            f"tables present: {tables}"
+            f"missing core table {required!r}; stats={stats}, tables present: {tables}"
         )
 
 

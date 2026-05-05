@@ -54,29 +54,42 @@ def test_should_compact_reads_last_iteration() -> None:
     the "compacts after every message" bug."""
     # Top-level is huge (cumulative across 10 calls), but the LAST call's
     # prompt is small → no real context pressure → must not fire.
-    assert compaction.should_compact(
-        {
-            "input_tokens": 100,
-            "cache_read_input_tokens": 800_000,  # cumulative inflated
-            "cache_creation_input_tokens": 50_000,
-            "iterations": [
-                {"input_tokens": 10, "cache_read_input_tokens": 80_000, "cache_creation_input_tokens": 5_000}
-            ],
-        },
-        150_000,
-    ) is False
+    assert (
+        compaction.should_compact(
+            {
+                "input_tokens": 100,
+                "cache_read_input_tokens": 800_000,  # cumulative inflated
+                "cache_creation_input_tokens": 50_000,
+                "iterations": [
+                    {
+                        "input_tokens": 10,
+                        "cache_read_input_tokens": 80_000,
+                        "cache_creation_input_tokens": 5_000,
+                    }
+                ],
+            },
+            150_000,
+        )
+        is False
+    )
     # Last iteration alone crosses threshold → fire.
-    assert compaction.should_compact(
-        {
-            "input_tokens": 50,
-            "cache_read_input_tokens": 1_000_000,
-            "iterations": [
-                {"input_tokens": 5, "cache_read_input_tokens": 60_000},
-                {"input_tokens": 5, "cache_read_input_tokens": 160_000},  # last call
-            ],
-        },
-        150_000,
-    ) is True
+    assert (
+        compaction.should_compact(
+            {
+                "input_tokens": 50,
+                "cache_read_input_tokens": 1_000_000,
+                "iterations": [
+                    {"input_tokens": 5, "cache_read_input_tokens": 60_000},
+                    {
+                        "input_tokens": 5,
+                        "cache_read_input_tokens": 160_000,
+                    },  # last call
+                ],
+            },
+            150_000,
+        )
+        is True
+    )
 
 
 def test_should_compact_falls_back_to_cumulative() -> None:
@@ -85,19 +98,32 @@ def test_should_compact_falls_back_to_cumulative() -> None:
     tool-heavy turns, but that's strictly the old behavior — preserved
     so callers without iteration data still trigger eventually rather
     than silently never firing."""
-    assert compaction.should_compact(
-        {"input_tokens": 10, "cache_read_input_tokens": 800_000}, 150_000
-    ) is True
-    assert compaction.should_compact(
-        {"input_tokens": 10, "cache_creation_input_tokens": 200_000}, 150_000
-    ) is True
-    assert compaction.should_compact(
-        {"input_tokens": 10, "cache_read_input_tokens": 50_000}, 150_000
-    ) is False
+    assert (
+        compaction.should_compact(
+            {"input_tokens": 10, "cache_read_input_tokens": 800_000}, 150_000
+        )
+        is True
+    )
+    assert (
+        compaction.should_compact(
+            {"input_tokens": 10, "cache_creation_input_tokens": 200_000}, 150_000
+        )
+        is True
+    )
+    assert (
+        compaction.should_compact(
+            {"input_tokens": 10, "cache_read_input_tokens": 50_000}, 150_000
+        )
+        is False
+    )
     # Empty iterations list also falls through to cumulative.
-    assert compaction.should_compact(
-        {"input_tokens": 10, "cache_read_input_tokens": 800_000, "iterations": []}, 150_000
-    ) is True
+    assert (
+        compaction.should_compact(
+            {"input_tokens": 10, "cache_read_input_tokens": 800_000, "iterations": []},
+            150_000,
+        )
+        is True
+    )
 
 
 # -------------------------------------------------------- preamble builders

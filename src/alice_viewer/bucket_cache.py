@@ -43,7 +43,9 @@ def _path_for(bucket_seconds: int, bucket_start: int) -> pathlib.Path:
     return cache_dir() / f"{bucket_seconds}s" / f"{bucket_start}.json"
 
 
-def read(bucket_seconds: int, bucket_start: int, content_hash: str) -> BucketSummary | None:
+def read(
+    bucket_seconds: int, bucket_start: int, content_hash: str
+) -> BucketSummary | None:
     path = _path_for(bucket_seconds, bucket_start)
     if not path.is_file():
         return None

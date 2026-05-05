@@ -36,12 +36,7 @@ def _write_wake(
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{hhmmss}-wake.md"
     p.write_text(
-        "---\n"
-        f"mode: sleep\n"
-        f"stage: {stage}\n"
-        f"did_work: {did_work}\n"
-        "---\n\n"
-        "body\n"
+        f"---\nmode: sleep\nstage: {stage}\ndid_work: {did_work}\n---\n\nbody\n"
     )
     if mtime is not None:
         import os
@@ -101,9 +96,30 @@ def test_snapshot_counts_consecutive_b_wakes(tmp_path: pathlib.Path) -> None:
     oldest, counts up to the first non-matching wake."""
     now = _now()
     base = now.timestamp() - 7200  # 2h ago
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="120001", stage="B", did_work="false", mtime=base + 0)
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="120002", stage="B", did_work="false", mtime=base + 60)
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="120003", stage="B", did_work="false", mtime=base + 120)
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="120001",
+        stage="B",
+        did_work="false",
+        mtime=base + 0,
+    )
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="120002",
+        stage="B",
+        did_work="false",
+        mtime=base + 60,
+    )
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="120003",
+        stage="B",
+        did_work="false",
+        mtime=base + 120,
+    )
     out = snapshot(tmp_path, now=now)
     assert out.consecutive_b_wakes == 3
 
@@ -114,9 +130,30 @@ def test_snapshot_b_streak_breaks_on_did_work_true(
     """A productive Stage B wake breaks the consecutive-null streak."""
     now = _now()
     base = now.timestamp() - 5400  # 1.5h ago
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="000001", stage="B", did_work="true", mtime=base)
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="000002", stage="B", did_work="false", mtime=base + 60)
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="000003", stage="B", did_work="false", mtime=base + 120)
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="000001",
+        stage="B",
+        did_work="true",
+        mtime=base,
+    )
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="000002",
+        stage="B",
+        did_work="false",
+        mtime=base + 60,
+    )
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="000003",
+        stage="B",
+        did_work="false",
+        mtime=base + 120,
+    )
     out = snapshot(tmp_path, now=now)
     # Walking newest → oldest, the first 2 are false-streak, then
     # the third (did_work=true) breaks the streak.
@@ -130,7 +167,14 @@ def test_snapshot_did_work_parser_robust_to_commentary(
     falsey (matches the convention seen in real wake files)."""
     now = _now()
     base = now.timestamp() - 60
-    p = _write_wake(tmp_path, day="2026-04-30", hhmmss="170000", stage="B", did_work="false", mtime=base)
+    p = _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="170000",
+        stage="B",
+        did_work="false",
+        mtime=base,
+    )
     # Rewrite to add commentary.
     p.write_text(
         "---\nmode: sleep\nstage: B\ndid_work: false — closing clean.\n---\n\nbody\n"
@@ -147,8 +191,22 @@ def test_snapshot_counts_consecutive_null_c_wakes(
 ) -> None:
     now = _now()
     base = now.timestamp() - 600
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="010000", stage="C", did_work="false", mtime=base + 0)
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="010001", stage="C", did_work="false", mtime=base + 60)
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="010000",
+        stage="C",
+        did_work="false",
+        mtime=base + 0,
+    )
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="010001",
+        stage="C",
+        did_work="false",
+        mtime=base + 60,
+    )
     out = snapshot(tmp_path, now=now)
     assert out.consecutive_null_c_wakes == 2
 
@@ -185,6 +243,13 @@ def test_snapshot_recency_window_excludes_old_thoughts(
     count toward the consecutive streak."""
     now = _now()
     old = now.timestamp() - 5 * 3600  # 5h ago
-    _write_wake(tmp_path, day="2026-04-30", hhmmss="090000", stage="B", did_work="false", mtime=old)
+    _write_wake(
+        tmp_path,
+        day="2026-04-30",
+        hhmmss="090000",
+        stage="B",
+        did_work="false",
+        mtime=old,
+    )
     out = snapshot(tmp_path, now=now)
     assert out.consecutive_b_wakes == 0

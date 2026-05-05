@@ -87,9 +87,7 @@ class QuietQueueRunner:
         if not messages:
             return
         log.info("draining quiet queue (%d msgs) — %s", len(messages), reason)
-        self._events.emit(
-            "quiet_queue_drain", count=len(messages), reason=reason
-        )
+        self._events.emit("quiet_queue_drain", count=len(messages), reason=reason)
         for msg in messages:
             channel = ChannelRef(
                 transport=msg.transport,

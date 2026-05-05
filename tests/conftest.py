@@ -64,32 +64,32 @@ def cfg(tmp_path: pathlib.Path) -> Config:
 def address_book() -> AddressBook:
     """Standard two-principal address book matching the legacy
     ALLOWED_SENDERS fixture: Owner on signal+cli, Friend on signal only."""
-    return AddressBook([
-        PrincipalRecord(
-            id="owner",
-            display_name="Owner",
-            channels=[
-                PrincipalChannel(
-                    transport="signal",
-                    address="+15555550100",
-                    durable=True,
-                    preferred=True,
-                ),
-                PrincipalChannel(
-                    transport="cli", address="1000", durable=False
-                ),
-            ],
-        ),
-        PrincipalRecord(
-            id="friend",
-            display_name="Friend",
-            channels=[
-                PrincipalChannel(
-                    transport="signal",
-                    address="+15555550101",
-                    durable=True,
-                    preferred=True,
-                ),
-            ],
-        ),
-    ])
+    return AddressBook(
+        [
+            PrincipalRecord(
+                id="owner",
+                display_name="Owner",
+                channels=[
+                    PrincipalChannel(
+                        transport="signal",
+                        address="+15555550100",
+                        durable=True,
+                        preferred=True,
+                    ),
+                    PrincipalChannel(transport="cli", address="1000", durable=False),
+                ],
+            ),
+            PrincipalRecord(
+                id="friend",
+                display_name="Friend",
+                channels=[
+                    PrincipalChannel(
+                        transport="signal",
+                        address="+15555550101",
+                        durable=True,
+                        preferred=True,
+                    ),
+                ],
+            ),
+        ]
+    )

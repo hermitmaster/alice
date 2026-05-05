@@ -14,7 +14,7 @@ class Wake:
     wake_id: str
     start_ts: float
     end_ts: float | None
-    status: str   # running | ended | timeout | exception
+    status: str  # running | ended | timeout | exception
     model: str | None
     duration_ms: int | None
     total_cost_usd: float | None
@@ -40,7 +40,7 @@ class Turn:
     turn_id: str
     start_ts: float
     end_ts: float | None
-    kind: str        # signal | surface | emergency
+    kind: str  # signal | surface | emergency
     sender_name: str | None
     surface_id: str | None
     emergency_id: str | None
@@ -90,12 +90,12 @@ class Run:
     """
 
     run_id: str
-    kind: str           # thinking-wake | signal-turn | surface-turn | emergency-turn
-    hemisphere: str     # thinking | speaking
+    kind: str  # thinking-wake | signal-turn | surface-turn | emergency-turn
+    hemisphere: str  # thinking | speaking
     start_ts: float
     end_ts: float | None
-    status: str         # running | ended | errored | timeout | exception
-    summary: str        # one-line label for the row
+    status: str  # running | ended | errored | timeout | exception
+    summary: str  # one-line label for the row
     duration_ms: int | None
     cost_usd: float | None
     model: str | None
@@ -252,7 +252,7 @@ def summarize_turn(t: Turn) -> str:
                     return f"context compaction · {summary_len}-char summary"
                 break
         if t.error:
-            return f"context compaction · errored"
+            return "context compaction · errored"
         if t.end_ts is None:
             return "context compaction · running…"
         return "context compaction"
@@ -497,20 +497,25 @@ def latest_speaking_usage(events: list[UnifiedEvent]) -> dict[str, Any] | None:
         "ts": latest.ts,
         "turn_id": latest.correlation_id,
         "totals": totals,
-        "context": last_iter,           # snapshot at end of run (≈ /context output)
+        "context": last_iter,  # snapshot at end of run (≈ /context output)
         "iterations": len(iters),
         "model": (latest.detail or {}).get("model"),
     }
 
 
 def thinking_usage_average(
-    events: list[UnifiedEvent], *, window_seconds: float = 86400, now_ts: float | None = None
+    events: list[UnifiedEvent],
+    *,
+    window_seconds: float = 86400,
+    now_ts: float | None = None,
 ) -> dict[str, Any] | None:
     """Average the four token counts over thinking results in the last window."""
     import time as _time
+
     cutoff = (now_ts if now_ts is not None else _time.time()) - window_seconds
     results = [
-        e for e in events
+        e
+        for e in events
         if e.hemisphere == "thinking" and e.kind == "result" and e.ts >= cutoff
     ]
     if not results:
@@ -535,7 +540,7 @@ def thinking_usage_average(
 @dataclass
 class InteractionNode:
     id: str
-    kind: str     # wake | turn | surface | emergency | note | thought | directive
+    kind: str  # wake | turn | surface | emergency | note | thought | directive
     label: str
     ts: float
     meta: dict[str, Any] = field(default_factory=dict)
@@ -545,7 +550,7 @@ class InteractionNode:
 class InteractionEdge:
     source: str
     target: str
-    kind: str     # reads | writes | consumes | surfaces | replies | voices
+    kind: str  # reads | writes | consumes | surfaces | replies | voices
 
 
 def build_interaction_graph(
@@ -568,7 +573,9 @@ def build_interaction_graph(
         edges.append(InteractionEdge(source=source, target=target, kind=kind))
 
     # Directive is a single well-known node — every wake reads it.
-    add_node(InteractionNode(id="directive", kind="directive", label="directive.md", ts=0.0))
+    add_node(
+        InteractionNode(id="directive", kind="directive", label="directive.md", ts=0.0)
+    )
 
     # Wakes + thoughts.
     for wake in wakes:
@@ -596,7 +603,11 @@ def build_interaction_graph(
                 kind="turn",
                 label=label,
                 ts=turn.start_ts,
-                meta={"kind": turn.kind, "sender": turn.sender_name, "tools": turn.tools},
+                meta={
+                    "kind": turn.kind,
+                    "sender": turn.sender_name,
+                    "tools": turn.tools,
+                },
             )
         )
 
@@ -694,22 +705,24 @@ def build_interaction_graph(
 
 @dataclass
 class ConversationArc:
-    arc_id: str          # the underlying turn_id
-    kind: str            # "signal" | "surface" | "emergency"
-    ts: float            # turn start
+    arc_id: str  # the underlying turn_id
+    kind: str  # "signal" | "surface" | "emergency"
+    ts: float  # turn start
     end_ts: float | None
     duration_ms: int | None
-    sender: str | None   # principal display name for signal; "Thinking Alice" for surface
+    sender: (
+        str | None
+    )  # principal display name for signal; "Thinking Alice" for surface
     stimulus: str | None  # inbound text or surface body (full)
-    stimulus_kind: str    # "signal" | "surface" | "emergency"
+    stimulus_kind: str  # "signal" | "surface" | "emergency"
     surface_id: str | None  # originating surface filename, if any
     thinking_excerpt: str | None  # first thinking block text in the turn
-    thinking_count: int   # number of thinking blocks captured
+    thinking_count: int  # number of thinking blocks captured
     response: str | None  # turn.outbound
     tools: list[str]
     error: str | None
     has_response: bool
-    detail_url: str       # /turns/{turn_id}
+    detail_url: str  # /turns/{turn_id}
     surface_event: UnifiedEvent | None  # surface_pending/_resolved if matched
     # Raw turn for drilldown
     turn: Turn
@@ -734,7 +747,8 @@ class ConversationArc:
             "detail_url": self.detail_url,
             "surface_filename": (
                 self.surface_event.detail.get("filename")
-                if self.surface_event else None
+                if self.surface_event
+                else None
             ),
         }
 
@@ -857,14 +871,14 @@ def group_arcs(
 @dataclass
 class ArcStep:
     node_id: str
-    kind: str             # turn | wake | surface | emergency | note | thought
-    hemisphere: str       # speaking | thinking | inner
+    kind: str  # turn | wake | surface | emergency | note | thought
+    hemisphere: str  # speaking | thinking | inner
     label: str
     ts: float
-    status: str           # pending | resolved | ended | running | errored | timeout | exception | written | consumed
-    detail: dict[str, Any]    # type-specific body/inbound/outbound/etc
+    status: str  # pending | resolved | ended | running | errored | timeout | exception | written | consumed
+    detail: dict[str, Any]  # type-specific body/inbound/outbound/etc
     incoming_edge: str | None  # edge kind from the predecessor in the arc, if any
-    detail_url: str | None     # /turns/{id} or /wakes/{id} when applicable
+    detail_url: str | None  # /turns/{id} or /wakes/{id} when applicable
 
 
 @dataclass
@@ -916,11 +930,26 @@ def _step_status(node: InteractionNode, wake: Wake | None, turn: Turn | None) ->
         if meta.get("trailer"):
             raw = (meta["trailer"] or {}).get("verdict")
             if isinstance(raw, str):
-                token = raw.strip().split()[0].rstrip(".,;:").lower() if raw.strip() else ""
+                token = (
+                    raw.strip().split()[0].rstrip(".,;:").lower() if raw.strip() else ""
+                )
                 short_tokens = {
-                    "pending", "resolved", "applied", "voiced", "noted",
-                    "let", "drop", "drop.", "skip", "skipped", "deferred",
-                    "accepted", "rejected", "filed", "ack", "ok",
+                    "pending",
+                    "resolved",
+                    "applied",
+                    "voiced",
+                    "noted",
+                    "let",
+                    "drop",
+                    "drop.",
+                    "skip",
+                    "skipped",
+                    "deferred",
+                    "accepted",
+                    "rejected",
+                    "filed",
+                    "ack",
+                    "ok",
                 }
                 if token and token in short_tokens and len(raw.strip()) <= 24:
                     return token
@@ -1051,7 +1080,9 @@ def build_interaction_arcs(
     Returns arcs newest-first.
     """
     real_nodes = [n for n in nodes if n.kind != "directive"]
-    real_edges = [e for e in edges if e.source != "directive" and e.target != "directive"]
+    real_edges = [
+        e for e in edges if e.source != "directive" and e.target != "directive"
+    ]
 
     node_by_id = {n.id: n for n in real_nodes}
     wake_by_id = {w.wake_id: w for w in wakes}
@@ -1100,8 +1131,16 @@ def build_interaction_arcs(
 
         steps: list[ArcStep] = []
         for n in comp_nodes:
-            wake = wake_by_id.get(n.id.removeprefix("wake::")) if n.kind == "wake" else None
-            turn = turn_by_id.get(n.id.removeprefix("turn::")) if n.kind == "turn" else None
+            wake = (
+                wake_by_id.get(n.id.removeprefix("wake::"))
+                if n.kind == "wake"
+                else None
+            )
+            turn = (
+                turn_by_id.get(n.id.removeprefix("turn::"))
+                if n.kind == "turn"
+                else None
+            )
 
             # Pick the incoming edge from the latest predecessor that's
             # still earlier in the arc — that's "what got us here."
@@ -1126,15 +1165,25 @@ def build_interaction_arcs(
                     label=n.label,
                     ts=n.ts,
                     status=_step_status(n, wake, turn),
-                    detail=_step_detail(n, wake, turn, run_summary_module=run_summary_module),
+                    detail=_step_detail(
+                        n, wake, turn, run_summary_module=run_summary_module
+                    ),
                     incoming_edge=in_edge,
                     detail_url=_detail_url_for_node(n),
                 )
             )
 
         first = comp_nodes[0]
-        first_wake = wake_by_id.get(first.id.removeprefix("wake::")) if first.kind == "wake" else None
-        first_turn = turn_by_id.get(first.id.removeprefix("turn::")) if first.kind == "turn" else None
+        first_wake = (
+            wake_by_id.get(first.id.removeprefix("wake::"))
+            if first.kind == "wake"
+            else None
+        )
+        first_turn = (
+            turn_by_id.get(first.id.removeprefix("turn::"))
+            if first.kind == "turn"
+            else None
+        )
         hemispheres = sorted({s.hemisphere for s in steps})
         arcs.append(
             Arc(

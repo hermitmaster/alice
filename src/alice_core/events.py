@@ -60,6 +60,7 @@ class EventLogger:
         if self.echo:
             # Intentional stderr write — used by --echo mode for live debugging.
             import sys
+
             sys.stderr.write(line + "\n")
             sys.stderr.flush()
 

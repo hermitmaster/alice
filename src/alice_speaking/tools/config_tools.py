@@ -35,9 +35,7 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def build(
-    cfg: Config, *, personae: Personae | None = None
-) -> list[SdkMcpTool[Any]]:
+def build(cfg: Config, *, personae: Personae | None = None) -> list[SdkMcpTool[Any]]:
     p = personae or placeholder_personae()
     agent = p.agent.name
     config_path = cfg.mind_dir / "config" / "alice.config.json"

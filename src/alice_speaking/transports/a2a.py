@@ -113,7 +113,9 @@ def _install_proto_utils_patch() -> None:
                 )
         elif field.has_presence:
             if not msg.HasField(field.name):
-                return _pu.ValidationDetail(field=field.name, message="Field is required.")
+                return _pu.ValidationDetail(
+                    field=field.name, message="Field is required."
+                )
         elif val == field.default_value:
             return _pu.ValidationDetail(field=field.name, message="Field is required.")
         return None
@@ -130,6 +132,7 @@ def _install_proto_utils_patch() -> None:
         elif field.message_type.GetOptions().map_entry:
             for k, v in val.items():
                 from google.protobuf.message import Message as ProtobufMessage
+
                 if isinstance(v, ProtobufMessage):
                     sub_errs = _pu._validate_proto_required_fields_internal(v)
                     _pu._append_nested_errors(errors, f"{field.name}[{k}]", sub_errs)
@@ -454,9 +457,7 @@ class _AliceExecutor(AgentExecutor):
     def __init__(self, transport: A2ATransport) -> None:
         self._t = transport
 
-    async def execute(
-        self, context: RequestContext, event_queue: EventQueue
-    ) -> None:
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         # Create or pick up the Task. The SDK requires us to enqueue a
         # Task BEFORE any status / artifact updates — that's what
         # registers the task in the in-memory store and lets clients
@@ -470,7 +471,9 @@ class _AliceExecutor(AgentExecutor):
         task_id = task.id
         ctx_id = task.context_id or task_id
 
-        text = (get_message_text(context.message) or "").strip() if context.message else ""
+        text = (
+            (get_message_text(context.message) or "").strip() if context.message else ""
+        )
         if not text:
             await event_queue.enqueue_event(
                 new_text_status_update_event(
@@ -562,9 +565,7 @@ class _AliceExecutor(AgentExecutor):
         finally:
             self._t._close_task_outbox(task_id)
 
-    async def cancel(
-        self, context: RequestContext, event_queue: EventQueue
-    ) -> None:
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         # v1: best-effort. We acknowledge cancellation but the daemon's
         # in-flight turn keeps running until it finishes — turns are
         # short-ish and proper interrupt plumbing into the kernel can

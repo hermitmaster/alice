@@ -64,7 +64,9 @@ def test_send_to_unknown_task_logs_and_drops(caplog):
     async def go():
         return await t.send(
             OutboundMessage(
-                destination=ChannelRef(transport="a2a", address="ghost-task", durable=False),
+                destination=ChannelRef(
+                    transport="a2a", address="ghost-task", durable=False
+                ),
                 text="hello",
             )
         )
@@ -84,7 +86,9 @@ def test_send_routes_chunks_to_open_outbox():
     async def go():
         delivered = await t.send(
             OutboundMessage(
-                destination=ChannelRef(transport="a2a", address="task-1", durable=False),
+                destination=ChannelRef(
+                    transport="a2a", address="task-1", durable=False
+                ),
                 text="**hello** world",
             )
         )
@@ -138,6 +142,7 @@ def test_typing_is_noop():
 
 
 # -- live smoke ---------------------------------------------------------------
+
 
 # Binds a real socket. Skipped in default suite; opt in with `pytest -m live`.
 @pytest.mark.live
@@ -205,7 +210,8 @@ def test_live_request_response_smoke():
         assert any(
             "echo: hello alice"
             in (
-                ev["result"].get("artifactUpdate", {})
+                ev["result"]
+                .get("artifactUpdate", {})
                 .get("artifact", {})
                 .get("parts", [{}])[0]
                 .get("text", "")

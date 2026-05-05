@@ -154,12 +154,18 @@ class AddressBook:
             ch = record.channel_for(transport)
             if ch is None:
                 return None
-            return ChannelRef(transport=ch.transport, address=ch.address, durable=ch.durable)
+            return ChannelRef(
+                transport=ch.transport, address=ch.address, durable=ch.durable
+            )
         for ch in record.channels:
             if ch.preferred:
-                return ChannelRef(transport=ch.transport, address=ch.address, durable=ch.durable)
+                return ChannelRef(
+                    transport=ch.transport, address=ch.address, durable=ch.durable
+                )
         ch = record.channels[0]
-        return ChannelRef(transport=ch.transport, address=ch.address, durable=ch.durable)
+        return ChannelRef(
+            transport=ch.transport, address=ch.address, durable=ch.durable
+        )
 
     def emergency_recipient(self) -> Optional[ChannelRef]:
         """The principal to ping when an emergency surfaces and no inbound
