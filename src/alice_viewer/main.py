@@ -14,7 +14,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
-from . import aggregators, labels as kind_labels, narrative as narrative_mod, sources
+from . import (
+    aggregators,
+    cluster_registry,
+    labels as kind_labels,
+    narrative as narrative_mod,
+    sources,
+)
 from .settings import Paths, load as load_paths
 
 
@@ -686,7 +692,51 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         clusters = cm.get("clusters", [])
         cross_cluster_edges = cm.get("cross_cluster_edges", [])
 
-        label_by_cid = {c["id"]: c["label"] for c in clusters}
+        # Phase 2: stable cluster IDs from the persistent Jaccard-tracked
+        # registry. The fresh ``cl-<top-hub>`` labels in
+        # ``cm["clusters"][i]["label"]`` are recomputed every request and
+        # rot across rebuilds; the registry's labels are minted at birth
+        # and frozen forever (with ``absorbed_into`` pointers when
+        # clusters retire). The misc bucket bypasses the registry — it's
+        # not an identity, it's a junk drawer.
+        label_by_cid: dict[str, str] = {}
+        for c in clusters:
+            if c["is_misc"]:
+                label_by_cid[c["id"]] = c["label"]
+        topical_clusters = [c for c in clusters if not c["is_misc"]]
+        if topical_clusters:
+            reg_path = cluster_registry.registry_path()
+            prev_registry = cluster_registry.load_registry(reg_path)
+            new_registry, _alerts = cluster_registry.rebuild(
+                cluster_members={c["id"]: c["member_ids"] for c in topical_clusters},
+                cluster_top_hubs={
+                    c["id"]: [h["id"] for h in c["top_hubs"]] for c in topical_clusters
+                },
+                label_by_id={n.id: n.label for n in nodes},
+                prev_registry=prev_registry,
+            )
+            # Persist if the registry mutated (new entries, drift updates,
+            # retirement bumps).
+            if new_registry != prev_registry:
+                cluster_registry.save_registry(reg_path, new_registry)
+            # Resolve fresh cid -> stable id by re-running the matching:
+            # every fresh cid that survived the rebuild now has a single
+            # entry whose ``last_member_set`` is identical to that fresh
+            # cluster's members. Reverse-index by member set to find it.
+            members_to_stable: dict[frozenset, str] = {
+                frozenset(e["last_member_set"]): sid
+                for sid, e in new_registry["entries"].items()
+                if e.get("status") == "live"
+                and e.get("last_rebuild") == new_registry["last_rebuild"]
+            }
+            for c in topical_clusters:
+                stable = members_to_stable.get(frozenset(c["member_ids"]))
+                # Fallback to the fresh content-derived label if the
+                # registry didn't resolve (shouldn't happen in v1; defensive).
+                label_by_cid[c["id"]] = stable or c["label"]
+        else:
+            for c in clusters:
+                label_by_cid[c["id"]] = c["label"]
 
         # neighbor_clusters: for each node, count undirected edges into
         # each cluster_label. Self-cluster edges are kept so a consumer
@@ -712,9 +762,11 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                 nc = neighbor_clusters.setdefault(e.target, {})
                 nc[slabel] = nc.get(slabel, 0) + 1
 
-        clusters_out = {
-            c["label"]: {
-                "label": c["label"],
+        clusters_out = {}
+        for c in clusters:
+            stable_label = label_by_cid.get(c["id"], c["label"])
+            entry = {
+                "label": stable_label,
                 "id": c["id"],
                 "size": c["size"],
                 "is_misc": c["is_misc"],
@@ -722,8 +774,19 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                 "member_slugs": c["member_ids"],
                 "top_hubs": c["top_hubs"],
             }
-            for c in clusters
-        }
+            # Carry registry-derived stability fields when the cluster
+            # has a real (non-misc) entry. drift + current/birth top hub
+            # are the diagnostic signals Alice's Stage D selection and
+            # the cortex-memory/query skill use to decide how much trust
+            # to put in the cluster name.
+            if not c["is_misc"] and topical_clusters:
+                reg_entry = new_registry["entries"].get(stable_label)
+                if reg_entry:
+                    entry["drift"] = reg_entry.get("drift", 0.0)
+                    entry["birth_top_hub"] = reg_entry.get("birth_top_hub")
+                    entry["current_top_hub"] = reg_entry.get("current_top_hub")
+                    entry["created"] = reg_entry.get("created")
+            clusters_out[stable_label] = entry
         nodes_out = {
             n.id: {
                 "cluster_id": node_cluster.get(n.id),
@@ -750,6 +813,71 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                 "nodes": nodes_out,
                 "clusters": clusters_out,
                 "cross_edges": cross_out,
+            }
+        )
+
+    @app.get("/api/cluster-registry")
+    async def api_cluster_registry() -> JSONResponse:
+        """Persistent cluster identity registry — Phase 2 of the
+        lobe-context handoff to Alice.
+
+        The viewer's alice-mind mount is read-only, so the registry
+        lives in ``$ALICE_VIEWER_CACHE_DIR/clusters/registry.json``
+        rather than the spec'd ``inner/state/`` location. Alice's
+        thinking polls this endpoint during wakes to read entries
+        and drift alerts; the data is identical to what the spec
+        describes — only the storage path differs.
+
+        Response shape:
+
+            {
+              "schema_version": 1,
+              "generated_at": <unix-ts>,
+              "registry_path": "<host path for diagnostics>",
+              "last_rebuild": "<ISO date>",
+              "entries":      {"cl-foo": {<full registry entry>}},
+              "drift_alerts": [{"id", "drift", "birth_top_hub",
+                                "current_top_hub", "birth_size",
+                                "current_size", "created"}, ...]
+            }
+
+        ``drift_alerts`` is the v1 substitute for the spec's "fire a
+        surface to ``inner/notes/``" mechanism (also blocked by the RO
+        mount). Thinking polls; drift ≥ 0.30 entries appear in the list
+        until they drop below threshold or get retired/renamed.
+
+        Calling this endpoint re-runs the cluster computation and
+        rebuild step — same cost as ``/api/cluster-snapshot`` because
+        Alice may want fresh registry state without paying for the full
+        snapshot payload.
+        """
+        p: Paths = app.state.paths
+        nodes, edges = sources.read_memory_graph(p.mind_dir)
+        cm = sources.compute_cluster_metrics(nodes, edges)
+        topical_clusters = [c for c in cm.get("clusters", []) if not c["is_misc"]]
+        reg_path = cluster_registry.registry_path()
+        prev_registry = cluster_registry.load_registry(reg_path)
+        if topical_clusters:
+            new_registry, alerts = cluster_registry.rebuild(
+                cluster_members={c["id"]: c["member_ids"] for c in topical_clusters},
+                cluster_top_hubs={
+                    c["id"]: [h["id"] for h in c["top_hubs"]] for c in topical_clusters
+                },
+                label_by_id={n.id: n.label for n in nodes},
+                prev_registry=prev_registry,
+            )
+            if new_registry != prev_registry:
+                cluster_registry.save_registry(reg_path, new_registry)
+        else:
+            new_registry, alerts = prev_registry, []
+        return JSONResponse(
+            {
+                "schema_version": new_registry.get("schema_version", 1),
+                "generated_at": time.time(),
+                "registry_path": str(reg_path),
+                "last_rebuild": new_registry.get("last_rebuild"),
+                "entries": new_registry.get("entries", {}),
+                "drift_alerts": alerts,
             }
         )
 
