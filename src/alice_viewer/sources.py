@@ -948,9 +948,13 @@ def compute_cluster_metrics(
         modularity = Q
 
     # Top hubs = highest in-degree nodes restricted to the topical subgraph.
+    # out_degree alongside in_degree distinguishes sinks (high in / low out)
+    # from crossroads (high in / high out) — different recombination roles.
     in_deg: dict[str, int] = {}
-    for _src, tgt in topical_edges:
+    out_deg: dict[str, int] = {}
+    for src, tgt in topical_edges:
         in_deg[tgt] = in_deg.get(tgt, 0) + 1
+        out_deg[src] = out_deg.get(src, 0) + 1
     label_by_id = {n.id: n.label for n in nodes}
     folder_by_id = {n.id: n.folder for n in nodes}
     hub_ids = sorted(in_deg, key=lambda nid: (-in_deg[nid], nid))[:top_hub_count]
@@ -960,6 +964,7 @@ def compute_cluster_metrics(
             "label": label_by_id.get(nid, nid),
             "folder": folder_by_id.get(nid, ""),
             "in_degree": in_deg[nid],
+            "out_degree": out_deg.get(nid, 0),
         }
         for nid in hub_ids
     ]
@@ -1002,6 +1007,13 @@ def compute_cluster_metrics(
     # across rebuilds (Phase 2 brings the Jaccard registry for that). When
     # a real lobe has no in-degree at all (no bridge note), fall back to
     # the cid string. Misc bucket has no meaningful label.
+    # Date prefix (YYYY-MM-DD-) is stripped from the slug so dated daily
+    # notes that happen to be the top hub don't produce labels like
+    # cl-2026-05-04-truenas-host-down-diagnostic-runbook. If the strip
+    # leaves a too-short slug (e.g. the top hub is just a bare date), keep
+    # the date so the label still has content.
+    _DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
     def _kebab(s: str) -> str:
         out = []
         prev_dash = False
@@ -1014,6 +1026,14 @@ def compute_cluster_metrics(
                 prev_dash = True
         return "".join(out).strip("-") or "unnamed"
 
+    def _label_for_hub(hub_label: str) -> str:
+        slug = _kebab(hub_label)
+        stripped = _DATE_PREFIX.sub("", slug)
+        # Don't strip if the result would be too short to carry meaning.
+        if len(stripped) >= 4:
+            slug = stripped
+        return f"cl-{slug}"
+
     clusters_out: list[dict[str, Any]] = []
     cluster_label_by_cid: dict[str, str] = {}
     # Real lobes first, in size-desc order; misc bucket last (only if it exists).
@@ -1025,14 +1045,14 @@ def compute_cluster_metrics(
         if not member_ids:
             continue
         # Per-cluster top hubs by in-degree (within topical subgraph).
-        local_hubs = sorted(
+        local_hubs_ids = sorted(
             (nid for nid in member_ids if nid in in_deg),
             key=lambda nid: (-in_deg[nid], nid),
         )[:5]
         if cid == "misc":
             cluster_label = "cl-misc"
-        elif local_hubs:
-            cluster_label = "cl-" + _kebab(label_by_id.get(local_hubs[0], local_hubs[0]))
+        elif local_hubs_ids:
+            cluster_label = _label_for_hub(label_by_id.get(local_hubs_ids[0], local_hubs_ids[0]))
         else:
             cluster_label = f"cl-{cid}"
         cluster_label_by_cid[cid] = cluster_label
@@ -1049,8 +1069,9 @@ def compute_cluster_metrics(
                         "id": nid,
                         "label": label_by_id.get(nid, nid),
                         "in_degree": in_deg.get(nid, 0),
+                        "out_degree": out_deg.get(nid, 0),
                     }
-                    for nid in local_hubs
+                    for nid in local_hubs_ids
                 ],
             }
         )

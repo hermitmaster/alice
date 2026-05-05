@@ -615,12 +615,32 @@ def create_app(paths: Paths | None = None) -> FastAPI:
 
             {
               "generated_at": <unix-ts>,
-              "nodes":    {"<slug>": {"cluster_id", "cluster_label", "in_degree"}},
+              "nodes":    {"<slug>": {"cluster_id", "cluster_label",
+                                       "in_degree", "out_degree",
+                                       "last_modified",
+                                       "neighbor_clusters"}},
               "clusters": {"cl-foo": {"label", "id", "size", "is_misc",
                                        "dominant_folder", "member_slugs",
                                        "top_hubs"}},
               "cross_edges": {"cl-foo|cl-bar": {"weight", "weight_normalized"}}
             }
+
+        Per-node fields:
+
+        - ``cluster_id`` is ``null`` for non-topical notes (dailies,
+          operational instructions, root-level index/README notes,
+          unresolved wikilink ghosts). These are intentionally excluded
+          from cluster analysis upstream by ``_is_topical`` — they bridge
+          across domains and would force a hairball verdict. Consumers
+          (cortex-memory/query, Stage D) should treat null as **skip**,
+          not as "find nearest cluster".
+        - ``neighbor_clusters`` is an undirected count of edges from this
+          node to each cluster (cluster_label → edge_count). Useful for
+          bridge-note detection: a node whose neighbor_clusters touches 4+
+          distinct clusters is a structural bridge regardless of which
+          cluster it nominally belongs to.
+        - ``last_modified`` is the file mtime, used by Stage D's "recent
+          research corpus" gates without requiring per-file stat() calls.
 
         Phase 1 omits per-cluster modularity (Phase 3) and Jaccard-tracked
         identity drift (Phase 2). Both will be added in place without
@@ -629,14 +649,41 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         p: Paths = app.state.paths
         nodes, edges = sources.read_memory_graph(p.mind_dir)
         in_deg: dict[str, int] = {}
+        out_deg: dict[str, int] = {}
         for e in edges:
             in_deg[e.target] = in_deg.get(e.target, 0) + 1
+            out_deg[e.source] = out_deg.get(e.source, 0) + 1
         cm = sources.compute_cluster_metrics(nodes, edges)
         node_cluster = cm.get("node_cluster", {})
         clusters = cm.get("clusters", [])
         cross_cluster_edges = cm.get("cross_cluster_edges", [])
 
         label_by_cid = {c["id"]: c["label"] for c in clusters}
+
+        # neighbor_clusters: for each node, count undirected edges into
+        # each cluster_label. Self-cluster edges are kept so a consumer
+        # can read in-cluster vs cross-cluster ratio. Both topical and
+        # non-topical nodes get populated — non-topical bridges (e.g.
+        # cortex-memory/index) genuinely link out into clusters and that
+        # signal matters even though the bridge node itself isn't in a
+        # cluster. Endpoints with no cluster (both endpoints non-topical)
+        # contribute nothing.
+        neighbor_clusters: dict[str, dict[str, int]] = {}
+        for e in edges:
+            sc = node_cluster.get(e.source)
+            tc = node_cluster.get(e.target)
+            # Source's view of target's cluster (if target is topical).
+            tlabel = label_by_cid.get(tc) if tc else None
+            if tlabel:
+                nc = neighbor_clusters.setdefault(e.source, {})
+                nc[tlabel] = nc.get(tlabel, 0) + 1
+            # Target's view of source's cluster (if source is topical) —
+            # undirected accounting.
+            slabel = label_by_cid.get(sc) if sc else None
+            if slabel:
+                nc = neighbor_clusters.setdefault(e.target, {})
+                nc[slabel] = nc.get(slabel, 0) + 1
+
         clusters_out = {
             c["label"]: {
                 "label": c["label"],
@@ -654,6 +701,9 @@ def create_app(paths: Paths | None = None) -> FastAPI:
                 "cluster_id": node_cluster.get(n.id),
                 "cluster_label": label_by_cid.get(node_cluster.get(n.id)),
                 "in_degree": in_deg.get(n.id, 0),
+                "out_degree": out_deg.get(n.id, 0),
+                "last_modified": n.mtime,
+                "neighbor_clusters": neighbor_clusters.get(n.id, {}),
             }
             for n in nodes
         }
