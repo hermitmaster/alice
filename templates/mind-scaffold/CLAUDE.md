@@ -67,6 +67,37 @@ verbatim.
 If a recurring task isn't a skill yet and I've done it 3+ times, add one at
 `.claude/skills/<name>/SKILL.md`.
 
+## GitHub Issue Auto-Fix Protocol
+
+When a surface arrives with `action: attempt-issue-fix`, it came from
+thinking after she analyzed a new trusted-author issue. The frontmatter
+carries `repo`, `issue_number`, `issue_url`, `issue_title`, `author`,
+`author_association`, `thinking_confidence`. The body contains the issue
+text and thinking's 3–5 sentence analysis (likely files, prior art,
+confidence). Protocol:
+
+1. **Idempotency check.** `gh pr list --repo <repo> --search "in:body
+   #<N>" --json number,url --limit 5`. If a PR already references the
+   issue, notify the user that the issue already has a PR, resolve the
+   surface, stop.
+2. **Notify-in.** Notify the user exactly once that a new issue arrived
+   and you're working it.
+3. **Spawn worker subagent.** Pass the issue body + thinking's analysis.
+   Worker: branch `auto-fix/issue-<N>`, implement fix, commit message
+   `<area>: fix <brief description> (#<N>)`, push, then `gh pr create
+   --draft --title "Auto-fix: <title>" --body "Automated fix attempt
+   for #<N>.\n\nFixes #<N>. Please review before merging."`. Worker
+   returns the PR URL or an error.
+4. **Notify-out.** On success, send the draft PR URL. On worker error or
+   low-confidence partial fix, send a short reason with the URL (or "not
+   created" if the worker bailed before pushing). Always send this
+   message, even on failure — silent failures break the contract.
+5. **Resolve the surface.**
+
+Rules: always `--draft`, never auto-merge. Exactly two notifications to
+the user per issue (in, out). No chatter between. The watcher writes
+notes only; thinking is the intermediary that produces these surfaces.
+
 ## External Actions — Ask First
 
 **Safe to do freely:** Read files, search web, work within this workspace.
