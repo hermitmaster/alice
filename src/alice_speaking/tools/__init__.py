@@ -22,7 +22,7 @@ from alice_core.config.personae import Personae, placeholder as placeholder_pers
 from ..domain.principals import AddressBook
 from ..infra.config import Config
 from ..infra.signal_rpc import SignalRPC as SignalClient
-from . import config_tools, inner, memory, messaging
+from . import config_tools, fs, inner, memory, messaging
 
 
 SERVER_NAME = "alice"
@@ -56,6 +56,7 @@ def build(
         *inner.build(cfg, personae=personae),
         *memory.build(cfg, personae=personae),
         *config_tools.build(cfg, personae=personae),
+        *fs.build(cfg, personae=personae),
     ]
     if sender is not None or signal is not None:
         tool_list.extend(
