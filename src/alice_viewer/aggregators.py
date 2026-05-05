@@ -49,6 +49,13 @@ class Turn:
     error: str | None
     duration_ms: int | None
     total_cost_usd: float | None
+    # Context size (input + cache_read + cache_creation) at the *first*
+    # vs *last* internal API call of the agent loop — i.e. what the
+    # model had to read at the start of the turn vs at the end. Read off
+    # ``result.usage.iterations``; both None when the turn never produced
+    # a result event (still running, or pre-iterations event-log).
+    context_before: int | None = None
+    context_after: int | None = None
     tools: list[str] = field(default_factory=list)
     events: list[UnifiedEvent] = field(default_factory=list)
 
@@ -66,6 +73,8 @@ class Turn:
             "error": self.error,
             "duration_ms": self.duration_ms,
             "total_cost_usd": self.total_cost_usd,
+            "context_before": self.context_before,
+            "context_after": self.context_after,
             "tools": self.tools,
             "event_count": len(self.events),
         }
@@ -380,7 +389,34 @@ def group_turns(events: list[UnifiedEvent]) -> list[Turn]:
                 turn.tools.append(name)
         elif ev.kind == "result":
             turn.total_cost_usd = d.get("total_cost_usd")
+            usage = d.get("usage") or {}
+            iters = usage.get("iterations") or []
+            if iters:
+                turn.context_before = _iter_context(iters[0])
+                turn.context_after = _iter_context(iters[-1])
+            else:
+                # Pre-iterations event-log lines: cumulative top-level is
+                # the only signal we have. Over-counts on tool-heavy
+                # turns (cache_read sums across calls), but lets old
+                # turns still show *something* in the column.
+                fallback = _iter_context(usage)
+                turn.context_before = fallback
+                turn.context_after = fallback
     return sorted(by_id.values(), key=lambda t: t.start_ts)
+
+
+def _iter_context(usage: dict[str, Any] | None) -> int | None:
+    """``input + cache_read + cache_creation`` for one usage payload."""
+    if not isinstance(usage, dict):
+        return None
+    try:
+        return (
+            int(usage.get("input_tokens") or 0)
+            + int(usage.get("cache_read_input_tokens") or 0)
+            + int(usage.get("cache_creation_input_tokens") or 0)
+        )
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
