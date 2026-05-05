@@ -642,6 +642,34 @@ def create_app(paths: Paths | None = None) -> FastAPI:
         - ``last_modified`` is the file mtime, used by Stage D's "recent
           research corpus" gates without requiring per-file stat() calls.
 
+        Per-cluster ``top_hubs``:
+
+        - Ordered by **in-degree within the topical subgraph**, descending,
+          with alphabetical tiebreak on the node id. Each hub entry carries
+          both ``in_degree`` and ``out_degree`` so consumers can distinguish
+          sinks (high in / low out) from crossroads (high in / high out).
+          Phase 3 may add named alternative metrics (PageRank, betweenness)
+          on a sibling field; in-degree stays the default.
+
+        Cross-edges:
+
+        - Keys are ``"<label_a>|<label_b>"`` with ``label_a < label_b``
+          lexicographically — **symmetric and aggregated**. ``weight`` is
+          the total number of directed wikilinks bridging the two lobes
+          (either direction summed). ``weight_normalized`` is
+          ``weight / sqrt(|A| * |B|)``.
+
+        Cadence:
+
+        - **Computed fresh on every request.** No caching at this layer;
+          ``read_memory_graph`` re-walks ``cortex-memory/`` and ``memory/``
+          on each call, then ``compute_cluster_metrics`` re-runs label
+          propagation. ``generated_at`` is the response time, never older.
+          For today's vault (~950 nodes, ~7400 edges) the round-trip is
+          subsecond. If the vault grows past the point where this hurts,
+          we'll add a TTL/invalidation layer at the route boundary, not
+          inside the compute functions.
+
         Phase 1 omits per-cluster modularity (Phase 3) and Jaccard-tracked
         identity drift (Phase 2). Both will be added in place without
         breaking existing keys.
