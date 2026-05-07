@@ -9,13 +9,19 @@ vault state, no model calls. Phases:
 - ``SLEEP_B`` / ``SLEEP_C`` / ``SLEEP_D`` (23:00–06:59 sub-stages)
 - ``QUICK`` (smoke test)
 - ``DESIGN_COMMISSION`` (task-type dispatched, not cadence-driven)
+- ``CONFLICT_RESOLUTION`` (task-type dispatched, vault-state driven —
+  open items in ``cortex-memory/conflicts/``, not cadence-driven)
 
 Migration phases (per the design doc):
 
-- **Phase 0 (this commit)**: full cascade is *implemented* but the default
-  ``PhaseConfig.enable_full_sleep_dispatch=False`` flag collapses Sleep
-  selection to ``SLEEP_B`` only, preserving today's behavior.
-- **Phase 3** (deferred): flip the flag → full B/C/D dispatch lights up.
+- **Phase 0 (PR #14)**: full cascade implemented, but
+  ``PhaseConfig.enable_full_sleep_dispatch=False`` collapses Sleep to
+  ``SLEEP_B`` only, preserving the legacy single-stage behavior.
+- **Phase 3 (this commit)**: default flips to
+  ``enable_full_sleep_dispatch=True`` — sleep wakes route to
+  B/C/D based on vault state. Override via
+  ``alice.config.json thinking.phase_routing.enable_full_sleep_dispatch``
+  (set ``false`` to fall back to Phase-0 behavior).
 
 The fragment loader (:class:`PromptFragmentLoader`) reads from package
 resources at ``alice_thinking/prompts/{prelude.md, active.md, sleep-b.md,
@@ -43,6 +49,7 @@ __all__ = [
     "select_phase",
     "build_vault_snapshot",
     "detect_commission_notes",
+    "detect_conflict_notes",
     "STAGE_D_NIGHTLY_CAP",
 ]
 
@@ -65,6 +72,7 @@ class Phase(enum.Enum):
     SLEEP_D = "sleep_d"
     QUICK = "quick"
     DESIGN_COMMISSION = "design_commission"
+    CONFLICT_RESOLUTION = "conflict_resolution"
 
 
 @dataclass(frozen=True)
@@ -93,16 +101,24 @@ class VaultSnapshot:
 class PhaseConfig:
     """Per-phase tunables. Loaded from ``alice.config.json thinking.*``.
 
-    Phase 0 of the migration ships the full cascade in code but defaults
-    ``enable_full_sleep_dispatch=False`` — sleep window collapses to
-    ``SLEEP_B`` regardless of vault state, matching today's behavior.
-    Flip the flag (Phase 3) to unlock B/C/D dispatch.
+    Phase 3 of the migration ships ``enable_full_sleep_dispatch=True``
+    as the new default — sleep wakes route to B/C/D from vault state.
+    Set ``false`` in
+    ``thinking.phase_routing.enable_full_sleep_dispatch`` to fall back
+    to Phase-0 single-stage behavior if production behavior surprises.
+
+    ``allowed_tools`` and ``max_seconds`` are config overrides over
+    the runtime defaults: every non-Quick phase ships with the full
+    tool set (:data:`alice_thinking.runtime._FULL_TOOL_ALLOWLIST`)
+    and an unbounded budget (Quick keeps its 30s smoke-test guard).
+    ``None`` / ``0`` mean "fall through to the runtime default."
     """
 
     quick_mode: bool = False
-    enable_full_sleep_dispatch: bool = False
+    enable_full_sleep_dispatch: bool = True
 
-    # Per-phase budget overrides — 0 == use the kernel default (unbounded).
+    # Budget override — 0 == fall through to the runtime default
+    # (unbounded for real phases, 30s for Quick).
     max_seconds: int = 0
     allowed_tools: Optional[list[str]] = None
 
@@ -302,10 +318,11 @@ def build_vault_snapshot(
 def select_phase(vault: VaultSnapshot, cfg: Optional[PhaseConfig] = None) -> Phase:
     """Pure deterministic phase selector.
 
-    Migration Phase 0: when ``cfg.enable_full_sleep_dispatch`` is False
-    (default), the sleep window collapses to :attr:`Phase.SLEEP_B` to
-    preserve today's behavior. The full B/C/D cascade is wired but
-    suppressed behind the flag — Phase 3 of the migration flips it.
+    Phase 3 of the migration ships ``enable_full_sleep_dispatch=True``
+    as the default — sleep wakes route through the full B/C/D cascade
+    from vault state. Setting the flag to ``False`` (via
+    ``alice.config.json``) restores Phase-0 single-stage behavior:
+    every sleep wake collapses to :attr:`Phase.SLEEP_B`.
     """
 
     cfg = cfg or PhaseConfig()
@@ -477,6 +494,51 @@ def detect_commission_notes(mind: pathlib.Path) -> list[pathlib.Path]:
     if commission_dir.is_dir():
         for f in commission_dir.glob("*.md"):
             _push(f)
+
+    out.sort(key=lambda f: (f.stat().st_mtime if f.exists() else 0.0))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Conflict resolution task detection
+# ---------------------------------------------------------------------------
+
+
+def detect_conflict_notes(vault_dir: pathlib.Path) -> list[pathlib.Path]:
+    """Return open conflict notes from ``cortex-memory/conflicts/``.
+
+    A conflict note counts as "open" when its frontmatter ``status``
+    field is ``"open"`` OR the field is absent (treat absent as
+    open — vault contradictions land here unannotated).
+
+    Files under ``cortex-memory/conflicts/.resolved/`` are excluded
+    (resolved archive). Top-level hidden files are also ignored.
+
+    Output is sorted oldest-first by mtime (same convention as
+    :func:`detect_commission_notes`).
+
+    ``vault_dir`` is the vault root (``cortex-memory/``). Pass
+    ``mind / "cortex-memory"`` from callers in ``wake.py``.
+    """
+
+    conflicts_dir = vault_dir / "conflicts"
+    if not conflicts_dir.is_dir():
+        return []
+
+    out: list[pathlib.Path] = []
+    for f in conflicts_dir.glob("*.md"):
+        if f.name.startswith("."):
+            continue
+        if not f.is_file():
+            continue
+        try:
+            fm = _parse_frontmatter(f.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        status = fm.get("status", "").strip().strip('"').strip("'").lower()
+        if status and status != "open":
+            continue
+        out.append(f)
 
     out.sort(key=lambda f: (f.stat().st_mtime if f.exists() else 0.0))
     return out

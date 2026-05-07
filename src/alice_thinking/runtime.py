@@ -5,10 +5,34 @@ The Mode protocol stays alive — :class:`alice_thinking.modes.ActiveMode`
 and :class:`alice_thinking.modes.sleep.SleepMode` shrink to thin
 wrappers that delegate here.
 
-Phase 0 of the migration ships this layer with the sleep window
-collapsed to ``Phase.SLEEP_B`` (matching today's behavior). Phase 3
-flips ``PhaseConfig.enable_full_sleep_dispatch=True`` to unlock
-B/C/D dispatch.
+Tool allowlist resolution (post Speaking review 2026-05-07): every
+phase except :attr:`Phase.QUICK` gets the same full tool set
+(:data:`_FULL_TOOL_ALLOWLIST`). Per-phase tool restrictions were
+removed — locking down web/MCP per phase narrowed the design space
+unnecessarily; the prompt fragment guides use, not the harness.
+Quick keeps an empty allowlist as the smoke-test sanity guard.
+
+``max_seconds`` resolution: the wake interval is "fire at least
+this often," not "kill after this long." There is no per-phase
+``max_seconds`` default. Quick keeps the 30-second smoke-test
+bound. Real phases default to ``0`` (unbounded) and honor only the
+single user-facing knob ``thinking.max_wake_seconds`` (or
+:class:`PhaseConfig.max_seconds`, which it feeds).
+
+Resolution order (highest precedence first) for both fields:
+
+1. ``PhaseConfig.allowed_tools`` / ``PhaseConfig.max_seconds`` —
+   set via ``alice.config.json thinking.phase_routing.*`` or the
+   convenience ``thinking.max_wake_seconds`` top-level key.
+2. ``ctx.tools`` / ``ctx.max_seconds`` — populated by
+   ``alice_thinking.wake`` from the CLI ``--tools`` / ``--max-seconds``
+   flags (or the legacy ``thinking.allowed_tools`` /
+   ``thinking.max_wake_seconds`` config block).
+3. The full tool set (everywhere except Quick) and ``0`` for
+   ``max_seconds`` (everywhere except Quick=30).
+
+Phase 3 ships ``enable_full_sleep_dispatch=True`` so the cascade in
+:func:`select_phase` fans sleep wakes out to B/C/D.
 
 The :meth:`PhaseRunner._run_post_wake_hooks` extension point exists
 as a no-op stub for the companion STM/LTM design — Hebbian
@@ -33,103 +57,109 @@ if TYPE_CHECKING:
     from .modes.base import WakeContext
 
 
-__all__ = ["PhaseRunner", "load_phase_config"]
+__all__ = [
+    "PhaseRunner",
+    "load_phase_config",
+    "phase_default_allowed_tools",
+    "QUICK_MAX_SECONDS",
+]
 
 
-# Per-phase soft tool allowlists. Phase 2 wires these into the kernel
-# spec; Phase 1 keeps them as guidance only — the kernel still receives
-# ``ctx.tools`` so behavior is identical to today. Stored here as the
-# canonical reference so the matrix and the runtime stay in sync when
-# Phase 2 lands.
-_PHASE_TOOL_ALLOWLIST: dict[Phase, tuple[str, ...]] = {
-    Phase.ACTIVE: (
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "WebFetch",
-        "WebSearch",
-        "mcp__alice__send_message",
-    ),
-    Phase.SLEEP_B: (
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "WebFetch",
-        "WebSearch",
-        "mcp__alice__send_message",
-    ),
-    Phase.SLEEP_C: (
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "mcp__alice__send_message",
-    ),
-    Phase.SLEEP_D: (
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "mcp__alice__send_message",
-    ),
-    Phase.QUICK: (),
-    Phase.DESIGN_COMMISSION: (
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-    ),
-}
+# Single full tool allowlist shared by every non-Quick phase. Per
+# Speaking's review (2026-05-07): per-phase restrictions narrowed
+# the design space — a Stage D synthesis might want WebFetch for a
+# citation, a Stage C cleanup might want MCP. The prompt fragment
+# is the right place to guide use, not the harness. Names are
+# Claude-style (matching ``WakeContext.tools``); PiKernel's
+# ``_PI_TOOL_NAME_MAP`` translates them to pi-native names
+# downstream.
+_FULL_TOOL_ALLOWLIST: tuple[str, ...] = (
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Grep",
+    "Glob",
+    "WebFetch",
+    "WebSearch",
+    "mcp__alice__send_message",
+)
+
+
+# Quick keeps its 30s smoke-test sanity bound. Real phases run
+# unbounded unless the user pins ``thinking.max_wake_seconds``.
+QUICK_MAX_SECONDS = 30
 
 
 def phase_default_allowed_tools(phase: Phase) -> list[str]:
-    """Return the default allowlist for a phase. Reference only — the
-    runtime currently honors ``ctx.tools`` (set from CLI/config) so
-    Phase 0 ships behavior unchanged."""
-    return list(_PHASE_TOOL_ALLOWLIST.get(phase, ()))
+    """Return the default tool allowlist for ``phase`` (Claude-style names).
+
+    Every non-Quick phase shares :data:`_FULL_TOOL_ALLOWLIST`. Quick
+    is empty (no tools — the smoke test runs in /tmp).
+    """
+    if phase == Phase.QUICK:
+        return []
+    return list(_FULL_TOOL_ALLOWLIST)
 
 
 def load_phase_config(mind: pathlib.Path) -> PhaseConfig:
     """Resolve a :class:`PhaseConfig` from ``alice.config.json``.
 
-    Reads the ``thinking.phase_routing`` block (if any) and applies it
-    over the dataclass defaults. Unknown keys are ignored so configs
-    can ship ahead of the code that consumes them.
+    Two override sources, in this order (later wins on conflict):
+
+    1. The ``thinking`` block: ``enable_full_sleep_dispatch``
+       (bool) and ``max_wake_seconds`` (int) — surfaced at the top
+       level alongside the other ``thinking.*`` knobs (``model``,
+       ``allowed_tools``, ...) so Jason can flip the kill-switch
+       without nesting it under a sub-block.
+    2. The ``thinking.phase_routing`` block: the canonical home for
+       phase-routing tunables. Any field name on
+       :class:`PhaseConfig` may be set here. Unknown keys are
+       ignored so configs can ship ahead of the code consuming them.
+
+    Phase-routing keys defined in both places resolve to the
+    ``phase_routing`` value (the explicit block wins).
     """
     cfg_path = mind / "config" / "alice.config.json"
-    overrides: dict[str, Any] = {}
-    if cfg_path.is_file():
-        try:
-            blob = json.loads(cfg_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            blob = None
-        if isinstance(blob, dict):
-            think = blob.get("thinking") or {}
-            block = think.get("phase_routing") or {}
-            if isinstance(block, dict):
-                overrides = block
+    if not cfg_path.is_file():
+        return PhaseConfig()
+    try:
+        blob = json.loads(cfg_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return PhaseConfig()
+    if not isinstance(blob, dict):
+        return PhaseConfig()
 
-    base = PhaseConfig()
+    think = blob.get("thinking") or {}
+    if not isinstance(think, dict):
+        think = {}
+
+    overrides: dict[str, Any] = {}
+
+    # Top-level convenience overrides on the ``thinking`` block.
+    if "enable_full_sleep_dispatch" in think and isinstance(
+        think["enable_full_sleep_dispatch"], bool
+    ):
+        overrides["enable_full_sleep_dispatch"] = think["enable_full_sleep_dispatch"]
+    if "max_wake_seconds" in think:
+        try:
+            overrides["max_seconds"] = int(think["max_wake_seconds"])
+        except (TypeError, ValueError):
+            pass
+
+    # Canonical block — wins on conflict with the top-level keys.
+    block = think.get("phase_routing") or {}
+    if isinstance(block, dict):
+        for k, v in block.items():
+            overrides[k] = v
+
     fields = {f for f in PhaseConfig.__dataclass_fields__}
     kwargs = {k: v for k, v in overrides.items() if k in fields}
     if not kwargs:
-        return base
-    # PhaseConfig is frozen; rebuild via dataclass replace semantics.
+        return PhaseConfig()
     from dataclasses import replace
 
-    return replace(base, **kwargs)
+    return replace(PhaseConfig(), **kwargs)
 
 
 class PhaseRunner:
@@ -178,21 +208,63 @@ class PhaseRunner:
     def kernel_spec(self, phase: Phase, ctx: "WakeContext") -> KernelSpec:
         """Build a :class:`KernelSpec` for this phase + context.
 
-        Phase 0/1: tool allowlist + ``max_seconds`` come from
-        ``ctx.tools`` / ``ctx.max_seconds`` (CLI/config wired in
-        :mod:`alice_thinking.wake`). Phase 2 swaps in the per-phase
-        defaults from :data:`_PHASE_TOOL_ALLOWLIST` — this method is
-        the single place that change lands.
+        Tool allowlist + ``max_seconds`` resolve in this precedence
+        order:
+
+        1. :class:`PhaseConfig` (``alice.config.json``).
+        2. :class:`WakeContext` (CLI / legacy ``thinking.*``).
+        3. The runtime default — full tool set everywhere except
+           Quick (empty), and ``0`` (unbounded) for ``max_seconds``
+           everywhere except Quick (30s smoke-test bound).
+
+        Quick mode short-circuits to its own (tools=[],
+        max_seconds=30) so smoke-test wakes don't accidentally pick
+        up the full allowlist.
         """
+        if phase == Phase.QUICK or ctx.quick:
+            return KernelSpec(
+                model=ctx.model,
+                allowed_tools=[],
+                cwd=ctx.cwd,
+                add_dirs=ctx.add_dirs,
+                max_seconds=QUICK_MAX_SECONDS,
+                thinking="medium",
+                append_system_prompt=ctx.system_prompt or None,
+            )
+
         return KernelSpec(
             model=ctx.model,
-            allowed_tools=list(ctx.tools),
+            allowed_tools=self._resolve_tools(phase, ctx),
             cwd=ctx.cwd,
             add_dirs=ctx.add_dirs,
-            max_seconds=ctx.max_seconds,
+            max_seconds=self._resolve_max_seconds(ctx),
             thinking="medium",
             append_system_prompt=ctx.system_prompt or None,
         )
+
+    def _resolve_tools(self, phase: Phase, ctx: "WakeContext") -> list[str]:
+        """Return the resolved tool allowlist for ``phase`` + ``ctx``.
+
+        See :meth:`kernel_spec` for the precedence rules.
+        """
+        if self.config.allowed_tools is not None:
+            return list(self.config.allowed_tools)
+        if ctx.tools:
+            return list(ctx.tools)
+        return phase_default_allowed_tools(phase)
+
+    def _resolve_max_seconds(self, ctx: "WakeContext") -> int:
+        """Return the resolved ``max_seconds`` for this real-phase wake.
+
+        ``0`` (or negative) at any layer == "fall through to the next
+        layer." Real phases run unbounded by default; Quick is
+        handled before this method is reached.
+        """
+        if self.config.max_seconds and self.config.max_seconds > 0:
+            return self.config.max_seconds
+        if ctx.max_seconds and ctx.max_seconds > 0:
+            return ctx.max_seconds
+        return 0
 
     def run(
         self,
@@ -207,6 +279,34 @@ class PhaseRunner:
         )
         spec = self.kernel_spec(phase, ctx)
         return prompt_text, spec
+
+    # ------------------------------------------------------------------ #
+    # Conflict resolution — task-type triggered, mirrors design commission.
+
+    def _run_conflict_resolution(
+        self, ctx: "WakeContext"
+    ) -> dict[str, Any]:
+        """Stub conflict-resolution dispatch.
+
+        Mirrors the structural shape of
+        :func:`alice_thinking.wake._run_commission` so the wake-side
+        preempt hook can be wired today. The actual resolution
+        logic (Sonnet review of vault contradictions, merge or fork
+        the conflicting facts, archive into ``conflicts/.resolved/``)
+        is deferred to a follow-up commit.
+
+        Returns a no-op result dict with ``verdict="deferred"`` so
+        callers can log telemetry and resolve the surface without
+        committing fictitious work to the vault.
+        """
+
+        return {
+            "phase": Phase.CONFLICT_RESOLUTION.value,
+            "verdict": "deferred",
+            "summary": (
+                "Conflict resolution stub — real resolution logic deferred."
+            ),
+        }
 
     # ------------------------------------------------------------------ #
     # Companion-design extension point — STM/LTM Hebbian updates land here.
