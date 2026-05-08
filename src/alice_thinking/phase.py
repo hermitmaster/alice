@@ -169,21 +169,76 @@ def _has_inbox_items(mind: pathlib.Path) -> bool:
     return False
 
 
+_PLACEHOLDER_PREFIXES = ("(empty", "(none", "*(empty", "*(none", "_(empty", "_(none")
+
+
+def _open_section(text: str) -> str:
+    """Return the body of the ``## Open`` section of an unresolved-style note.
+
+    The file's authoring convention is ``## Open`` for the live backlog
+    plus ad-hoc instructional prose elsewhere (frontmatter, tl;dr, usage
+    notes). Probes that key off the whole file get tripped by that prose
+    and fire false positives even when the live backlog is empty. The
+    section helper scopes inspection to the live content.
+
+    Returns ``""`` when ``## Open`` is absent.
+    """
+    lines = text.splitlines()
+    in_open = False
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_open:
+                break  # next H2 closes the Open section
+            if stripped[3:].lower().lstrip().startswith("open"):
+                in_open = True
+            continue
+        if in_open:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def _open_section_is_empty(section: str) -> bool:
+    """Treat placeholder markers like ``*(empty — ...)`` as empty."""
+    if not section:
+        return True
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Strip italics / emphasis markers for the leading-token check.
+        head = stripped.lstrip("*_ ").lstrip()
+        if head.lower().startswith(_PLACEHOLDER_PREFIXES):
+            continue
+        return False
+    return True
+
+
 def _has_broken_links(mind: pathlib.Path) -> bool:
     """Cheap broken-link probe — `cortex-memory/unresolved.md` lists them.
 
-    The file's structure varies; treat any non-blank line that contains
-    ``[[`` as evidence of an unresolved link.
+    Scoped to the ``## Open`` section so frontmatter, tl;dr, and usage
+    prose can't false-positive. A non-empty entry containing ``[[`` is
+    evidence of an unresolved link.
     """
     p = mind / "cortex-memory" / "unresolved.md"
     if not p.is_file():
         return False
     try:
-        text = p.read_text()
+        section = _open_section(p.read_text())
     except OSError:
         return False
-    for line in text.splitlines():
-        if "[[" in line and not line.lstrip().startswith("#"):
+    if _open_section_is_empty(section):
+        return False
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        head = stripped.lstrip("*_ ").lstrip()
+        if head.lower().startswith(_PLACEHOLDER_PREFIXES):
+            continue
+        if "[[" in stripped:
             return True
     return False
 
@@ -192,18 +247,21 @@ def _has_orphan_stubs(mind: pathlib.Path) -> bool:
     """Probe for orphan stubs.
 
     A full O(n) vault scan is too expensive for every wake. Cheap proxy:
-    if `unresolved.md` exists at all, treat it as evidence (orphans tend
-    to live in the same audit file as broken links). The Phase 1 design
-    doc accepts this approximation; Phase 3 may swap in a finer check.
+    inspect the ``## Open`` section of ``cortex-memory/unresolved.md``.
+    The Phase 1 approximation kept the previous "any text in the file"
+    check, but unresolved.md always has frontmatter + tl;dr + instructional
+    prose, so the check fired every wake and pinned select_phase Rule 2a
+    to ``Phase.SLEEP_B`` regardless of true vault state. Scope to the
+    live backlog section instead.
     """
     p = mind / "cortex-memory" / "unresolved.md"
     if not p.is_file():
         return False
     try:
-        text = p.read_text().strip()
+        section = _open_section(p.read_text())
     except OSError:
         return False
-    return bool(text)
+    return not _open_section_is_empty(section)
 
 
 def _has_recent_research(
@@ -228,15 +286,37 @@ def _has_recent_research(
     return False
 
 
-def _read_counter(state_dir: pathlib.Path, name: str, *, today: str) -> int:
-    """Read an integer counter from a date-keyed file. Missing → 0."""
-    p = state_dir / f"{name}-{today}.txt"
-    if not p.is_file():
+def _consecutive_stage_count(
+    mind: pathlib.Path,
+    *,
+    stage: str,
+    require_did_work_false: bool,
+    now: _dt.datetime,
+    window_hours: int = 24,
+) -> int:
+    """Count consecutive wake files matching ``stage`` from newest backwards.
+
+    Single source of truth for the escalation counters: the wake-file
+    history under ``inner/thoughts/<date>/`` already records stage:
+    frontmatter on every wake, so deriving the streak from the live data
+    is more reliable than maintaining a separate counter file. The prior
+    implementation (``_read_counter``) read from counter files that no
+    code path actually wrote, so the counters were always 0 and Rule 2b
+    never fired.
+
+    Delegates to :func:`alice_thinking.vault_state._consecutive_count` so
+    both modules agree on the streak definition.
+    """
+    from . import vault_state as _vs
+
+    thoughts_dir = mind / "inner" / "thoughts"
+    if not thoughts_dir.is_dir():
         return 0
-    try:
-        return int(p.read_text().strip() or "0")
-    except (OSError, ValueError):
-        return 0
+    since = now - _dt.timedelta(hours=window_hours)
+    files = _vs._wake_files_within(thoughts_dir, since=since)
+    return _vs._consecutive_count(
+        files, stage=stage, require_did_work_false=require_did_work_false
+    )
 
 
 def _stage_d_cap_exhausted(state_dir: pathlib.Path, *, today: str, cap: int) -> bool:
@@ -299,8 +379,12 @@ def build_vault_snapshot(
             window_days=cfg.recent_research_window_days,
             min_count=cfg.recent_research_min_count,
         ),
-        consecutive_b=_read_counter(state_dir, "consecutive-b", today=today),
-        consecutive_null_c=_read_counter(state_dir, "consecutive-null-c", today=today),
+        consecutive_b=_consecutive_stage_count(
+            mind, stage="B", require_did_work_false=True, now=now
+        ),
+        consecutive_null_c=_consecutive_stage_count(
+            mind, stage="C", require_did_work_false=True, now=now
+        ),
         stage_d_cap_exhausted=_stage_d_cap_exhausted(
             state_dir, today=today, cap=cfg.stage_d_nightly_cap
         ),
@@ -480,7 +564,10 @@ def detect_commission_notes(mind: pathlib.Path) -> list[pathlib.Path]:
                 fm = _parse_frontmatter(f.read_text(encoding="utf-8", errors="replace"))
             except OSError:
                 continue
-            if fm.get("task_type", "").strip().strip('"').strip("'") == "design-commission":
+            if (
+                fm.get("task_type", "").strip().strip('"').strip("'")
+                == "design-commission"
+            ):
                 _push(f)
 
         # Filename fallback
@@ -495,7 +582,7 @@ def detect_commission_notes(mind: pathlib.Path) -> list[pathlib.Path]:
         for f in commission_dir.glob("*.md"):
             _push(f)
 
-    out.sort(key=lambda f: (f.stat().st_mtime if f.exists() else 0.0))
+    out.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0.0)
     return out
 
 
@@ -540,5 +627,5 @@ def detect_conflict_notes(vault_dir: pathlib.Path) -> list[pathlib.Path]:
             continue
         out.append(f)
 
-    out.sort(key=lambda f: (f.stat().st_mtime if f.exists() else 0.0))
+    out.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0.0)
     return out

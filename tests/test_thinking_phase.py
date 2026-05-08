@@ -286,17 +286,88 @@ def test_build_vault_snapshot_ignores_consumed_dir(tmp_path: pathlib.Path) -> No
     assert snap.has_inbox_items is False
 
 
-def test_build_vault_snapshot_reads_consecutive_counters(
+def test_build_vault_snapshot_counts_consecutive_b_from_wake_files(
     tmp_path: pathlib.Path,
 ) -> None:
+    """The consecutive_b/consecutive_null_c counters now derive from
+    ``inner/thoughts/`` wake-file frontmatter rather than from
+    counter-files no code path actually wrote. Regression: the prior
+    ``_read_counter`` implementation always returned 0 because the
+    counter files never existed."""
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True)
-    today = _now().date().isoformat()
-    (state_dir / f"consecutive-b-{today}.txt").write_text("4\n")
-    (state_dir / f"consecutive-null-c-{today}.txt").write_text("2\n")
+    thoughts = tmp_path / "inner" / "thoughts" / "2026-05-07"
+    thoughts.mkdir(parents=True)
+    # Three consecutive Stage B wakes, all did_work:false → streak 3.
+    import os as _os
+
+    for i, hhmmss in enumerate(("230000", "230500", "231000")):
+        wake = thoughts / f"{hhmmss}-wake.md"
+        wake.write_text("---\nmode: sleep\nstage: B\ndid_work: false\n---\n")
+        # Force ascending mtimes so newest-first walking works.
+        ts = _now().timestamp() - 3600 + i  # within the 24h window
+        _os.utime(wake, (ts, ts))
     snap = build_vault_snapshot(tmp_path, now=_now(), state_dir=state_dir)
-    assert snap.consecutive_b == 4
-    assert snap.consecutive_null_c == 2
+    assert snap.consecutive_b == 3
+
+
+def test_build_vault_snapshot_consecutive_b_breaks_on_did_work_true(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A Stage B wake with did_work:true breaks the null-pass streak —
+    the model is doing real work, so we don't want to escalate."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    thoughts = tmp_path / "inner" / "thoughts" / "2026-05-07"
+    thoughts.mkdir(parents=True)
+    import os as _os
+
+    # Newest first: the most recent wake had did_work:true → streak resets.
+    entries = (
+        ("230000", "false"),
+        ("230500", "false"),
+        ("231000", "true"),
+    )
+    for i, (hhmmss, did_work) in enumerate(entries):
+        wake = thoughts / f"{hhmmss}-wake.md"
+        wake.write_text(f"---\nmode: sleep\nstage: B\ndid_work: {did_work}\n---\n")
+        ts = _now().timestamp() - 3600 + i  # within the 24h window
+        _os.utime(wake, (ts, ts))
+    snap = build_vault_snapshot(tmp_path, now=_now(), state_dir=state_dir)
+    assert snap.consecutive_b == 0
+
+
+def test_build_vault_snapshot_consecutive_b_breaks_on_different_stage(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A non-B stage frontmatter (e.g. Stage C) breaks the streak."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    thoughts = tmp_path / "inner" / "thoughts" / "2026-05-07"
+    thoughts.mkdir(parents=True)
+    import os as _os
+
+    # Newest most recent: stage C → streak should be 0 (most recent isn't B).
+    for i, (hhmmss, stage) in enumerate(
+        (("230000", "B"), ("230500", "B"), ("231000", "C"))
+    ):
+        wake = thoughts / f"{hhmmss}-wake.md"
+        wake.write_text(f"---\nmode: sleep\nstage: {stage}\ndid_work: false\n---\n")
+        ts = _now().timestamp() - 3600 + i  # within the 24h window
+        _os.utime(wake, (ts, ts))
+    snap = build_vault_snapshot(tmp_path, now=_now(), state_dir=state_dir)
+    assert snap.consecutive_b == 0
+
+
+def test_build_vault_snapshot_handles_missing_thoughts_dir(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No thoughts dir at all → counters return 0 cleanly."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    snap = build_vault_snapshot(tmp_path, now=_now(), state_dir=state_dir)
+    assert snap.consecutive_b == 0
+    assert snap.consecutive_null_c == 0
 
 
 def test_build_vault_snapshot_detects_stage_d_cap_exhaustion(
@@ -307,10 +378,7 @@ def test_build_vault_snapshot_detects_stage_d_cap_exhaustion(
     today = _now().date().isoformat()
     pairs = state_dir / f"stage-d-pairs-{today}.jsonl"
     pairs.write_text(
-        "\n".join(
-            f'{{"ts": "x", "synthesis": "s{i}"}}' for i in range(3)
-        )
-        + "\n"
+        "\n".join(f'{{"ts": "x", "synthesis": "s{i}"}}' for i in range(3)) + "\n"
     )
     snap = build_vault_snapshot(tmp_path, now=_now(), state_dir=state_dir)
     assert snap.stage_d_cap_exhausted is True
@@ -336,7 +404,10 @@ def test_build_vault_snapshot_recent_research_window(
 
 def test_loader_compose_prelude_and_phase_fragment() -> None:
     loader = PromptFragmentLoader()
-    out = loader.compose(Phase.ACTIVE, timestamp_header="Current local time: 2026-05-07 14:00 EDT (Thursday)")
+    out = loader.compose(
+        Phase.ACTIVE,
+        timestamp_header="Current local time: 2026-05-07 14:00 EDT (Thursday)",
+    )
     # Header is at the top.
     assert out.startswith("Current local time: 2026-05-07 14:00 EDT (Thursday)")
     # Prelude content present.
@@ -396,9 +467,7 @@ def test_detect_commission_notes_frontmatter(tmp_path: pathlib.Path) -> None:
     notes.mkdir(parents=True)
     (notes / "regular.md").write_text("---\nkind: chat\n---\n")
     target = notes / "needs-design.md"
-    target.write_text(
-        "---\ntask_type: design-commission\nslug: foo\n---\n\nbody\n"
-    )
+    target.write_text("---\ntask_type: design-commission\nslug: foo\n---\n\nbody\n")
     found = detect_commission_notes(tmp_path)
     assert found == [target]
 
@@ -548,10 +617,7 @@ def test_select_phase_does_not_dispatch_to_conflict_resolution() -> None:
     """
     # Sweep representative snapshots across the day; none should
     # produce CONFLICT_RESOLUTION.
-    snaps = [
-        _snap(hour=h)
-        for h in (0, 1, 4, 7, 12, 16, 22, 23)
-    ] + [
+    snaps = [_snap(hour=h) for h in (0, 1, 4, 7, 12, 16, 22, 23)] + [
         _snap(hour=2, has_inbox_items=True),
         _snap(hour=4, has_recent_research=True),
         _snap(hour=1, consecutive_b=10, has_recent_research=True),
@@ -559,3 +625,137 @@ def test_select_phase_does_not_dispatch_to_conflict_resolution() -> None:
     for snap in snaps:
         out = select_phase(snap)
         assert out is not Phase.CONFLICT_RESOLUTION
+
+
+# ---------------------------------------------------------------------------
+# `cortex-memory/unresolved.md` probes — has_broken_links, has_orphan_stubs.
+# ---------------------------------------------------------------------------
+#
+# Regression: prior implementations returned True whenever the file had
+# any text, but the file always carries frontmatter + tl;dr + usage prose,
+# so has_orphan_stubs fired every wake and pinned Rule 2a to SLEEP_B even
+# when the live ## Open section was marked empty. Scope inspection to the
+# Open section.
+
+
+def _write_unresolved(mind: pathlib.Path, body: str) -> None:
+    cm = mind / "cortex-memory"
+    cm.mkdir(parents=True, exist_ok=True)
+    (cm / "unresolved.md").write_text(body)
+
+
+def test_has_orphan_stubs_returns_false_when_open_section_is_placeholder(
+    tmp_path: pathlib.Path,
+) -> None:
+    from alice_thinking.phase import _has_orphan_stubs
+
+    _write_unresolved(
+        tmp_path,
+        "---\ntitle: unresolved\ntags: [backlog]\n---\n\n"
+        "# unresolved\n\n"
+        "> **tl;dr** Backlog of dangling wikilinks; currently empty.\n\n"
+        "Wikilinks referenced somewhere in the vault that don't yet have a note.\n\n"
+        "## Open\n\n"
+        "*(empty — all previously-listed unresolved links now have notes)*\n",
+    )
+    assert _has_orphan_stubs(tmp_path) is False
+
+
+def test_has_orphan_stubs_returns_false_when_file_has_no_open_section(
+    tmp_path: pathlib.Path,
+) -> None:
+    from alice_thinking.phase import _has_orphan_stubs
+
+    _write_unresolved(
+        tmp_path,
+        "---\ntitle: unresolved\n---\n\n"
+        "# unresolved\n\n"
+        "Frontmatter and tl;dr only. No Open H2.\n",
+    )
+    assert _has_orphan_stubs(tmp_path) is False
+
+
+def test_has_orphan_stubs_returns_true_when_open_section_has_entry(
+    tmp_path: pathlib.Path,
+) -> None:
+    from alice_thinking.phase import _has_orphan_stubs
+
+    _write_unresolved(
+        tmp_path,
+        "---\ntitle: unresolved\n---\n\n"
+        "## Open\n\n"
+        "- [[ghost-concept]] — referenced from research/foo.md, no note yet\n",
+    )
+    assert _has_orphan_stubs(tmp_path) is True
+
+
+def test_has_orphan_stubs_returns_false_when_file_missing(
+    tmp_path: pathlib.Path,
+) -> None:
+    from alice_thinking.phase import _has_orphan_stubs
+
+    (tmp_path / "cortex-memory").mkdir()
+    assert _has_orphan_stubs(tmp_path) is False
+
+
+def test_has_broken_links_ignores_placeholder_open_section(
+    tmp_path: pathlib.Path,
+) -> None:
+    from alice_thinking.phase import _has_broken_links
+
+    _write_unresolved(
+        tmp_path,
+        "---\ntitle: unresolved\n---\n\n"
+        "## Open\n\n"
+        "*(empty — all previously-listed unresolved links now have notes)*\n",
+    )
+    assert _has_broken_links(tmp_path) is False
+
+
+def test_has_broken_links_ignores_wikilinks_outside_open_section(
+    tmp_path: pathlib.Path,
+) -> None:
+    from alice_thinking.phase import _has_broken_links
+
+    _write_unresolved(
+        tmp_path,
+        "---\ntitle: unresolved\n---\n\n"
+        "# unresolved\n\n"
+        "> **tl;dr** Backlog. Use [[ops-document]] to fill entries.\n\n"
+        "Body text mentions [[example-concept]] for instructional reasons.\n\n"
+        "## Open\n\n"
+        "*(empty)*\n",
+    )
+    assert _has_broken_links(tmp_path) is False
+
+
+def test_has_broken_links_returns_true_for_real_open_entry(
+    tmp_path: pathlib.Path,
+) -> None:
+    from alice_thinking.phase import _has_broken_links
+
+    _write_unresolved(
+        tmp_path,
+        "---\ntitle: unresolved\n---\n\n"
+        "## Open\n\n"
+        "- [[broken-target]] referenced from research/bar.md\n",
+    )
+    assert _has_broken_links(tmp_path) is True
+
+
+def test_has_broken_links_stops_at_next_h2_header(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An H2 after Open closes the section. Wikilinks below should
+    not count toward broken-link detection."""
+    from alice_thinking.phase import _has_broken_links
+
+    _write_unresolved(
+        tmp_path,
+        "---\ntitle: unresolved\n---\n\n"
+        "## Open\n\n"
+        "*(empty)*\n\n"
+        "## Closed\n\n"
+        "- [[resolved-link]] resolved 2026-05-01\n",
+    )
+    assert _has_broken_links(tmp_path) is False
