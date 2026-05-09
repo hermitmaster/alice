@@ -6,16 +6,19 @@ the docker-exec dance). Connects to ``/tmp/alice.sock`` (override with
 ``ALICE_CLI_SOCKET``), sends a message, and prints Alice's reply chunks
 to stdout until she signals ``done``.
 
-Two modes:
+Three modes:
 
-    alice-client -p "what's on today?"   # one-shot — print and exit
+    alice-client -p "what's on today?"   # one-shot prompt — print and exit
     alice-client                          # interactive — REPL over the
                                           # same socket; one connection,
                                           # many turns
+    alice-client --context                # one-shot context snapshot RPC;
+                                          # human-readable by default,
+                                          # raw JSON with --json
 
 A ``--json`` flag emits the raw event stream (one JSON event per line)
 to stdout instead of human-friendly chunks. Useful for agents driving
-Alice programmatically.
+Alice programmatically — and what the viewer's /context tab consumes.
 
 Exit codes:
     0   one or more turns completed (or interactive mode exited cleanly)
@@ -66,6 +69,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=float,
         default=None,
         help="Per-turn timeout in seconds (default: no timeout).",
+    )
+    p.add_argument(
+        "--context",
+        action="store_true",
+        help=(
+            "One-shot context-snapshot RPC. Prints the live daemon's "
+            "context composition (system prompt, tools, MCP, session) "
+            "and exits."
+        ),
+    )
+    p.add_argument(
+        "--no-text",
+        action="store_true",
+        dest="no_text",
+        help=(
+            "With --context: omit system_prompt and pending_preamble "
+            "bodies (sizes only). Cheaper to ship over the wire."
+        ),
     )
     return p.parse_args(argv)
 
@@ -253,10 +274,96 @@ def _run_interactive_async(sock: socket.socket, args: argparse.Namespace) -> int
     return exit_code[0]
 
 
+def run_context_request(sock: socket.socket, args: argparse.Namespace) -> int:
+    """One-shot context-snapshot RPC. Sends ``{"type": "context", ...}``,
+    drains the reply, and either prints a human-readable summary or
+    forwards the raw JSON events.
+
+    Exit codes match the message path: 0 success, 1 protocol failure,
+    2 server-reported error.
+    """
+    payload = {"type": "context", "include_text": not args.no_text}
+    sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+    if args.timeout is not None:
+        sock.settimeout(args.timeout)
+    snapshot: Optional[dict] = None
+    error_seen = False
+    for event in event_stream(sock):
+        if args.json_mode:
+            sys.stdout.write(json.dumps(event) + "\n")
+            sys.stdout.flush()
+        etype = event.get("type")
+        if etype == "context_snapshot":
+            snapshot = event.get("data") or {}
+        elif etype == "error":
+            error_seen = True
+            if not args.json_mode:
+                sys.stderr.write(
+                    "alice-client: error from alice: "
+                    f"{event.get('message', 'unspecified')}\n"
+                )
+        elif etype == "done":
+            break
+    if error_seen:
+        return 2
+    if not args.json_mode:
+        if snapshot is None:
+            sys.stderr.write("alice-client: no snapshot received before done\n")
+            return 1
+        _print_context_snapshot(snapshot)
+    return 0
+
+
+def _print_context_snapshot(snap: dict) -> None:
+    """Render a context snapshot as a debug-friendly text block on stdout."""
+    out = sys.stdout.write
+    out("alice context snapshot\n")
+    out(f"  model:        {snap.get('model') or '?'}\n")
+    out(f"  backend:      {snap.get('backend') or '?'}\n")
+    out(f"  session_id:   {snap.get('session_id') or '(none — cold start)'}\n")
+    in_flight = snap.get("in_flight")
+    if in_flight:
+        out(f"  in_flight:    yes (kind={in_flight.get('turn_kind')})\n")
+    else:
+        out("  in_flight:    no\n")
+    out(f"  mind_dir:     {snap.get('mind_dir') or '?'}\n")
+    out(f"  skills_cwd:   {snap.get('skills_cwd') or '?'}\n")
+    sp = snap.get("system_prompt") or {}
+    out(f"  system prompt: {sp.get('chars', 0)} chars\n")
+    preamble = snap.get("pending_preamble")
+    if preamble:
+        out(f"  pending preamble: {preamble.get('chars', 0)} chars\n")
+    else:
+        out("  pending preamble: none\n")
+    tools = snap.get("tools") or {}
+    builtin = tools.get("builtin") or []
+    custom = tools.get("custom") or []
+    out(
+        f"  tools:        {tools.get('count', 0)} total "
+        f"({len(builtin)} builtin + {len(custom)} custom)\n"
+    )
+    if builtin:
+        out(f"    builtin:    {', '.join(builtin)}\n")
+    mcp = snap.get("mcp_servers") or {}
+    if mcp:
+        out(f"  MCP servers ({len(mcp)}):\n")
+        for name in sorted(mcp.keys()):
+            spec = mcp[name] or {}
+            out(
+                f"    {name} ({spec.get('type', '?')}): "
+                f"{spec.get('tool_count', 0)} tools\n"
+            )
+            for tool in spec.get("tool_names") or []:
+                out(f"      - {tool}\n")
+    sys.stdout.flush()
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     sock = connect(args.socket)
     try:
+        if args.context:
+            return run_context_request(sock, args)
         if args.prompt is not None:
             return run_one_shot(sock, args)
         return run_interactive(sock, args)
