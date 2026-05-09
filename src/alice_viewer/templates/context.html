@@ -11,108 +11,150 @@
 
   <div id="context-error" class="context-error" hidden></div>
 
-  <div class="context-grid" id="context-grid" hidden>
-    <div class="context-donut-wrap">
-      <svg id="context-donut" class="context-donut"></svg>
-      <div class="context-donut-center">
-        <div class="context-donut-total" id="context-donut-total">—</div>
-        <div class="context-donut-label muted">approx tokens</div>
+  <div class="context-layout" id="context-layout" hidden>
+    <div class="context-blocks-pane">
+      <div class="context-blocks-meta">
+        <div><span class="k">model</span> <span id="context-model" class="mono">—</span></div>
+        <div><span class="k">window</span> <span id="context-window" class="mono">—</span></div>
+        <div><span class="k">used</span> <span id="context-used" class="mono">—</span></div>
+      </div>
+      <div class="context-blocks" id="context-blocks"></div>
+      <div class="context-blocks-foot">
+        <span><span class="sw filled-marker"></span> filled (probe + transcript)</span>
+        <span><span class="sw empty-marker"></span> free</span>
       </div>
     </div>
 
     <div class="context-side">
       <div class="context-meta">
-        <div class="metric"><span class="k">model</span><span class="v" id="context-model">—</span></div>
         <div class="metric"><span class="k">backend</span><span class="v" id="context-backend">—</span></div>
         <div class="metric"><span class="k">session</span><span class="v mono" id="context-session">—</span></div>
         <div class="metric"><span class="k">in flight</span><span class="v" id="context-inflight">—</span></div>
       </div>
 
-      <h3>breakdown</h3>
-      <div class="table-wrap">
-        <table class="context-breakdown">
-          <thead>
-            <tr><th>component</th><th class="num">~tokens</th><th class="num">%</th><th>detail</th></tr>
-          </thead>
-          <tbody id="context-rows"></tbody>
-          <tfoot>
-            <tr>
-              <td><b>total (probe view)</b></td>
-              <td class="num mono" id="context-total-tokens">—</td>
-              <td class="num">100%</td>
-              <td class="muted">excludes SDK chrome and live transcript</td>
-            </tr>
-            {% if state.speaking_usage and state.speaking_usage.context %}
-              {% set ctx = state.speaking_usage.context %}
-              <tr>
-                <td><b>last turn (SDK)</b></td>
-                <td class="num mono">{{ ctx.input | tokens }}</td>
-                <td class="num muted">—</td>
-                <td class="muted">input_tokens, last turn ({{ state.speaking_usage.ts | ago }})</td>
-              </tr>
-            {% endif %}
-          </tfoot>
-        </table>
-      </div>
+      <h3>Estimated usage by category</h3>
+      <ul class="context-legend" id="context-legend"></ul>
 
       <p class="muted small">
-        Token counts are approximate (cl100k_base, name-only for tool defs).
-        The probe sees what Alice's daemon assembles before the SDK call;
-        Anthropic's harness adds its own system prompt + tool schemas on top,
-        and the live transcript inside the resumed session is opaque to us —
-        that's the gap between "probe view" and "last turn (SDK)".
+        Each cell is one block of the model's context window
+        (<span id="context-cell-tokens" class="mono">—</span> tokens).
+        Probe components are what Alice's daemon assembles before the SDK
+        call. The "live transcript" bucket is the gap between that and the
+        last turn's actual SDK <code>input_tokens</code> — Anthropic's
+        harness chrome plus the resumed-session transcript that's opaque
+        to us.
       </p>
     </div>
   </div>
 
+  <script id="context-page-data" type="application/json">{{ context_page_data | safe }}</script>
   <script>
     (() => {
+      const PAGE = JSON.parse(
+        document.getElementById('context-page-data').textContent
+      );
+      const TOTAL_TOKENS = PAGE.context_window;
+      const CELLS = 200;
+      const COLS = 20;
+      const TOKENS_PER_CELL = TOTAL_TOKENS / CELLS;
       const COLORS = [
         '#8fc7ff', '#c39bff', '#7de3c4', '#ffd66b', '#ff9b6b',
         '#ff7a9b', '#9bd6ff', '#b6ffc6', '#ffe28a', '#d4a4ff',
       ];
+      const TRANSCRIPT_COLOR = '#5a6478';
       const $ = (id) => document.getElementById(id);
 
-      function renderDonut(components) {
-        const svg = d3.select('#context-donut');
-        svg.selectAll('*').remove();
-        const bbox = svg.node().getBoundingClientRect();
-        const size = Math.min(bbox.width, bbox.height) || 240;
-        const radius = size / 2;
-        const inner = radius * 0.62;
-        svg.attr('viewBox', [-radius, -radius, size, size]);
-
-        const pie = d3.pie().sort(null).value(d => d.tokens);
-        const arc = d3.arc().innerRadius(inner).outerRadius(radius - 4);
-        const arcs = pie(components);
-
-        svg.selectAll('path').data(arcs).join('path')
-          .attr('d', arc)
-          .attr('fill', (_d, i) => COLORS[i % COLORS.length])
-          .attr('stroke', '#0f1218')
-          .attr('stroke-width', 2)
-          .append('title').text(d => `${d.data.name}: ${d.data.tokens} tokens`);
+      function fmtTokens(n) {
+        if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+        if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+        return String(n);
       }
 
-      function renderRows(components, total) {
-        const tbody = $('context-rows');
-        tbody.innerHTML = '';
-        components.forEach((c, i) => {
-          const tr = document.createElement('tr');
-          const sw = `<span class="sw" style="background:${COLORS[i % COLORS.length]}"></span>`;
-          const pct = total > 0 ? ((c.tokens / total) * 100).toFixed(1) : '0';
-          tr.innerHTML = `
-            <td>${sw}<span class="mono">${c.name}</span></td>
-            <td class="num mono">${c.tokens.toLocaleString()}</td>
-            <td class="num mono">${pct}%</td>
-            <td class="muted small">${c.detail || ''}</td>
+      function buildBuckets(components, lastTurnInput) {
+        // Probe-known components first, each in its own color slot.
+        const buckets = components.map((c, i) => ({
+          name: c.name,
+          tokens: c.tokens,
+          detail: c.detail || '',
+          color: COLORS[i % COLORS.length],
+          source: 'probe',
+        }));
+        const probeTotal = buckets.reduce((s, b) => s + b.tokens, 0);
+        // If the SDK's last turn reported more than what the probe sees,
+        // attribute the gap to "live transcript" so the operator can see
+        // it. If less (rare — first turn), no gap bucket.
+        if (lastTurnInput && lastTurnInput > probeTotal) {
+          buckets.push({
+            name: 'live transcript (estimated)',
+            tokens: lastTurnInput - probeTotal,
+            detail: `gap between probe view and last turn's input_tokens`,
+            color: TRANSCRIPT_COLOR,
+            source: 'inferred',
+          });
+        }
+        return buckets;
+      }
+
+      function renderBlocks(buckets) {
+        const grid = $('context-blocks');
+        grid.innerHTML = '';
+        grid.style.setProperty('--cols', COLS);
+        let cellsUsed = 0;
+        for (const b of buckets) {
+          const cells = Math.max(
+            b.tokens > 0 ? 1 : 0,
+            Math.round(b.tokens / TOKENS_PER_CELL),
+          );
+          for (let i = 0; i < cells && cellsUsed < CELLS; i++) {
+            const div = document.createElement('div');
+            div.className = 'block filled';
+            div.style.background = b.color;
+            div.title = `${b.name}: ${b.tokens.toLocaleString()} tokens`;
+            grid.appendChild(div);
+            cellsUsed++;
+          }
+        }
+        for (let i = cellsUsed; i < CELLS; i++) {
+          const div = document.createElement('div');
+          div.className = 'block empty';
+          grid.appendChild(div);
+        }
+      }
+
+      function renderLegend(buckets, totalUsed) {
+        const ul = $('context-legend');
+        ul.innerHTML = '';
+        for (const b of buckets) {
+          const pct = TOTAL_TOKENS > 0
+            ? ((b.tokens / TOTAL_TOKENS) * 100).toFixed(1)
+            : '0';
+          const li = document.createElement('li');
+          li.innerHTML = `
+            <span class="sw" style="background:${b.color}"></span>
+            <span class="lg-name">${b.name}</span>
+            <span class="lg-tokens mono">${fmtTokens(b.tokens)} tokens</span>
+            <span class="lg-pct mono muted">(${pct}%)</span>
           `;
-          tbody.appendChild(tr);
-        });
+          if (b.detail) {
+            li.title = b.detail;
+          }
+          ul.appendChild(li);
+        }
+        // Free space row
+        const free = Math.max(0, TOTAL_TOKENS - totalUsed);
+        const freePct = ((free / TOTAL_TOKENS) * 100).toFixed(1);
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <span class="sw empty-marker"></span>
+          <span class="lg-name muted">free space</span>
+          <span class="lg-tokens mono muted">${fmtTokens(free)} tokens</span>
+          <span class="lg-pct mono muted">(${freePct}%)</span>
+        `;
+        ul.appendChild(li);
       }
 
       function showError(msg) {
-        $('context-grid').hidden = true;
+        $('context-layout').hidden = true;
         const e = $('context-error');
         e.hidden = false;
         e.textContent = msg;
@@ -120,7 +162,7 @@
 
       function clearError() {
         $('context-error').hidden = true;
-        $('context-grid').hidden = false;
+        $('context-layout').hidden = false;
       }
 
       async function refresh() {
@@ -135,16 +177,28 @@
           }
           const data = await resp.json();
           clearError();
-          renderDonut(data.components);
-          renderRows(data.components, data.total_tokens);
-          $('context-donut-total').textContent = data.total_tokens.toLocaleString();
-          $('context-total-tokens').textContent = data.total_tokens.toLocaleString();
+
+          const buckets = buildBuckets(
+            data.components,
+            PAGE.last_turn_input_tokens,
+          );
+          const totalUsed = buckets.reduce((s, b) => s + b.tokens, 0);
+
+          renderBlocks(buckets);
+          renderLegend(buckets, totalUsed);
+
           const snap = data.snapshot || {};
           $('context-model').textContent = snap.model || '—';
+          $('context-window').textContent = `${fmtTokens(TOTAL_TOKENS)} ctx`;
+          const pct = ((totalUsed / TOTAL_TOKENS) * 100).toFixed(1);
+          $('context-used').textContent =
+            `${fmtTokens(totalUsed)} / ${fmtTokens(TOTAL_TOKENS)} (${pct}%)`;
           $('context-backend').textContent = snap.backend || '—';
           $('context-session').textContent = snap.session_id || '(cold)';
           $('context-inflight').textContent =
             snap.in_flight ? `yes · ${snap.in_flight.turn_kind}` : 'no';
+          $('context-cell-tokens').textContent = fmtTokens(TOKENS_PER_CELL);
+
           const stamp = new Date().toLocaleTimeString();
           $('context-status').textContent = `updated ${stamp}`;
         } catch (err) {

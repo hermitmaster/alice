@@ -243,3 +243,7 @@ def test_context_page_renders(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "context · live snapshot" in response.text
     assert "/api/context" in response.text
+    # Block-grid renderer needs the page-data JSON tag with the model
+    # context window so it knows how many cells to allocate.
+    assert "context-page-data" in response.text
+    assert "context_window" in response.text

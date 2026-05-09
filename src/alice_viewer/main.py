@@ -457,17 +457,47 @@ def create_app(paths: Paths | None = None) -> FastAPI:
     async def context_view(request: Request):
         """Live snapshot of the speaking daemon's context composition.
 
-        The page itself just renders the chrome + an empty donut; the
-        actual snapshot fetch happens via a separate ``/api/context``
+        The page itself just renders the chrome + an empty block grid;
+        the actual snapshot fetch happens via a separate ``/api/context``
         call so the operator sees the page immediately and can hit
         refresh without a hard reload.
+
+        Page-level config (model context window, last-turn input_tokens
+        for the "live transcript" bucket) is injected as a JSON script
+        tag so the page-load JS doesn't need a second fetch.
         """
+        import os as _os
+
+        state = _state_context()
+        speaking_usage = state.get("speaking_usage") or {}
+        ctx_obj = speaking_usage.get("context") or {}
+        # The model's real context cost for the last turn is
+        # input + cache_creation + cache_read — the bare "input" field
+        # only counts the uncached new prompt for that turn (often <100
+        # tokens). The cache reads ARE in context; they're just billed
+        # cheaper. Mirrors aggregators._iter_context.
+        last_turn_total = (
+            int(ctx_obj.get("input") or 0)
+            + int(ctx_obj.get("cache_creation") or 0)
+            + int(ctx_obj.get("cache_read") or 0)
+        )
+        # Default 1M (Alice runs Opus 4.7 with the [1m] context-window
+        # opt-in); override per-host via env when running a 200k model.
+        try:
+            ctx_window = int(_os.environ.get("ALICE_CONTEXT_WINDOW", "1000000"))
+        except ValueError:
+            ctx_window = 1_000_000
+        page_data = {
+            "context_window": ctx_window,
+            "last_turn_input_tokens": last_turn_total or None,
+        }
         return templates.TemplateResponse(
             request,
             "context.html",
             {
-                "state": _state_context(),
+                "state": state,
                 "active": "context",
+                "context_page_data": json.dumps(page_data),
             },
         )
 
