@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}context{% endblock %}
+{% block body %}
+  <div class="context-header">
+    <h1>context · live snapshot</h1>
+    <div class="context-actions">
+      <button id="context-refresh" type="button">refresh</button>
+      <span id="context-status" class="muted"></span>
+    </div>
+  </div>
+
+  <div id="context-error" class="context-error" hidden></div>
+
+  <div class="context-grid" id="context-grid" hidden>
+    <div class="context-donut-wrap">
+      <svg id="context-donut" class="context-donut"></svg>
+      <div class="context-donut-center">
+        <div class="context-donut-total" id="context-donut-total">—</div>
+        <div class="context-donut-label muted">approx tokens</div>
+      </div>
+    </div>
+
+    <div class="context-side">
+      <div class="context-meta">
+        <div class="metric"><span class="k">model</span><span class="v" id="context-model">—</span></div>
+        <div class="metric"><span class="k">backend</span><span class="v" id="context-backend">—</span></div>
+        <div class="metric"><span class="k">session</span><span class="v mono" id="context-session">—</span></div>
+        <div class="metric"><span class="k">in flight</span><span class="v" id="context-inflight">—</span></div>
+      </div>
+
+      <h3>breakdown</h3>
+      <div class="table-wrap">
+        <table class="context-breakdown">
+          <thead>
+            <tr><th>component</th><th class="num">~tokens</th><th class="num">%</th><th>detail</th></tr>
+          </thead>
+          <tbody id="context-rows"></tbody>
+          <tfoot>
+            <tr>
+              <td><b>total (probe view)</b></td>
+              <td class="num mono" id="context-total-tokens">—</td>
+              <td class="num">100%</td>
+              <td class="muted">excludes SDK chrome and live transcript</td>
+            </tr>
+            {% if state.speaking_usage and state.speaking_usage.context %}
+              {% set ctx = state.speaking_usage.context %}
+              <tr>
+                <td><b>last turn (SDK)</b></td>
+                <td class="num mono">{{ ctx.input | tokens }}</td>
+                <td class="num muted">—</td>
+                <td class="muted">input_tokens, last turn ({{ state.speaking_usage.ts | ago }})</td>
+              </tr>
+            {% endif %}
+          </tfoot>
+        </table>
+      </div>
+
+      <p class="muted small">
+        Token counts are approximate (cl100k_base, name-only for tool defs).
+        The probe sees what Alice's daemon assembles before the SDK call;
+        Anthropic's harness adds its own system prompt + tool schemas on top,
+        and the live transcript inside the resumed session is opaque to us —
+        that's the gap between "probe view" and "last turn (SDK)".
+      </p>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const COLORS = [
+        '#8fc7ff', '#c39bff', '#7de3c4', '#ffd66b', '#ff9b6b',
+        '#ff7a9b', '#9bd6ff', '#b6ffc6', '#ffe28a', '#d4a4ff',
+      ];
+      const $ = (id) => document.getElementById(id);
+
+      function renderDonut(components) {
+        const svg = d3.select('#context-donut');
+        svg.selectAll('*').remove();
+        const bbox = svg.node().getBoundingClientRect();
+        const size = Math.min(bbox.width, bbox.height) || 240;
+        const radius = size / 2;
+        const inner = radius * 0.62;
+        svg.attr('viewBox', [-radius, -radius, size, size]);
+
+        const pie = d3.pie().sort(null).value(d => d.tokens);
+        const arc = d3.arc().innerRadius(inner).outerRadius(radius - 4);
+        const arcs = pie(components);
+
+        svg.selectAll('path').data(arcs).join('path')
+          .attr('d', arc)
+          .attr('fill', (_d, i) => COLORS[i % COLORS.length])
+          .attr('stroke', '#0f1218')
+          .attr('stroke-width', 2)
+          .append('title').text(d => `${d.data.name}: ${d.data.tokens} tokens`);
+      }
+
+      function renderRows(components, total) {
+        const tbody = $('context-rows');
+        tbody.innerHTML = '';
+        components.forEach((c, i) => {
+          const tr = document.createElement('tr');
+          const sw = `<span class="sw" style="background:${COLORS[i % COLORS.length]}"></span>`;
+          const pct = total > 0 ? ((c.tokens / total) * 100).toFixed(1) : '0';
+          tr.innerHTML = `
+            <td>${sw}<span class="mono">${c.name}</span></td>
+            <td class="num mono">${c.tokens.toLocaleString()}</td>
+            <td class="num mono">${pct}%</td>
+            <td class="muted small">${c.detail || ''}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+
+      function showError(msg) {
+        $('context-grid').hidden = true;
+        const e = $('context-error');
+        e.hidden = false;
+        e.textContent = msg;
+      }
+
+      function clearError() {
+        $('context-error').hidden = true;
+        $('context-grid').hidden = false;
+      }
+
+      async function refresh() {
+        $('context-status').textContent = 'fetching…';
+        try {
+          const resp = await fetch('/api/context', { cache: 'no-store' });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({ error: resp.statusText }));
+            showError(`${body.kind || 'error'}: ${body.error || resp.statusText}`);
+            $('context-status').textContent = 'error';
+            return;
+          }
+          const data = await resp.json();
+          clearError();
+          renderDonut(data.components);
+          renderRows(data.components, data.total_tokens);
+          $('context-donut-total').textContent = data.total_tokens.toLocaleString();
+          $('context-total-tokens').textContent = data.total_tokens.toLocaleString();
+          const snap = data.snapshot || {};
+          $('context-model').textContent = snap.model || '—';
+          $('context-backend').textContent = snap.backend || '—';
+          $('context-session').textContent = snap.session_id || '(cold)';
+          $('context-inflight').textContent =
+            snap.in_flight ? `yes · ${snap.in_flight.turn_kind}` : 'no';
+          const stamp = new Date().toLocaleTimeString();
+          $('context-status').textContent = `updated ${stamp}`;
+        } catch (err) {
+          showError(`fetch failed: ${err}`);
+          $('context-status').textContent = 'error';
+        }
+      }
+
+      $('context-refresh').addEventListener('click', refresh);
+      refresh();
+    })();
+  </script>
+{% endblock %}
