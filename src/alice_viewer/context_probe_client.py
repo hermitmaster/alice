@@ -1,12 +1,12 @@
-"""Viewer-side glue for the speaking daemon's ``alice context`` RPC.
+"""Viewer-side glue for the speaking daemon's context-snapshot RPC.
 
-The viewer runs on the host while the speaking daemon runs in the
-worker container. This module shells out to ``bin/alice context --json``
-(which docker-execs into the worker, hits the CLI socket, and prints
-the snapshot) and turns the result into a structure suitable for the
-``/context`` template — including a tiktoken-based estimate of the
-token weight of each component so the donut renders in proportional
-slices.
+The viewer container shares ``/state`` with the worker (both bind-mount
+the host's ``~/.local/state/alice``), so the worker's CLI socket lives
+at ``/state/alice.sock`` from inside the viewer. We connect there
+directly and speak the same wire protocol the worker accepts — no
+``bin/alice``, no docker-exec hop. Decomposes the resulting snapshot
+into a structure the ``/context`` template can render, with tiktoken
+proxy-token weights per component for the donut.
 
 Why tiktoken instead of the official anthropic ``count_tokens``: the
 viewer doesn't (and shouldn't) ship the anthropic SDK, and the donut
@@ -21,7 +21,8 @@ import asyncio
 import functools
 import json
 import logging
-import shutil
+import os
+import pathlib
 from typing import Any, Optional
 
 
@@ -29,6 +30,7 @@ log = logging.getLogger(__name__)
 
 
 SNAPSHOT_TIMEOUT_SECONDS = 15.0
+DEFAULT_SOCKET_PATH = "/state/alice.sock"
 
 
 @functools.lru_cache(maxsize=1)
@@ -55,71 +57,96 @@ def _tokens(text: Optional[str]) -> int:
         return max(1, len(text) // 4)
 
 
+def _resolve_socket_path(socket_path: Optional[str]) -> str:
+    return (
+        socket_path
+        or os.environ.get("ALICE_CLI_SOCKET")
+        or DEFAULT_SOCKET_PATH
+    )
+
+
 async def fetch_snapshot(
     *,
-    alice_bin: str = "alice",
+    socket_path: Optional[str] = None,
     timeout: float = SNAPSHOT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Run ``alice context --json`` and return the parsed snapshot.
+    """Connect to the worker's CLI socket and request a context snapshot.
+
+    Speaks the line-delimited JSON protocol documented in
+    :mod:`alice_speaking.transports.cli`: send
+    ``{"type": "context"}\\n``, drain events until ``done`` or
+    ``error``, return the ``context_snapshot`` payload.
 
     Raises:
-        FileNotFoundError: ``alice_bin`` isn't on PATH (or absolute
-            path doesn't exist).
-        TimeoutError: the subprocess didn't return within ``timeout``.
-        RuntimeError: the wrapper exited nonzero or didn't emit a
-            ``context_snapshot`` event.
+        FileNotFoundError: the socket doesn't exist (worker not up).
+        TimeoutError: didn't receive a terminal event in ``timeout`` s.
+        RuntimeError: the daemon replied with ``error`` (e.g. probe
+            unwired) or closed the connection without ``done``.
     """
-    if shutil.which(alice_bin) is None and not _is_existing_path(alice_bin):
+    path = _resolve_socket_path(socket_path)
+    if not pathlib.Path(path).exists():
         raise FileNotFoundError(
-            f"{alice_bin!r} not found on PATH — cannot reach the worker."
+            f"alice CLI socket not found at {path} — is the worker up?"
         )
-    proc = await asyncio.create_subprocess_exec(
-        alice_bin,
-        "context",
-        "--json",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
     try:
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(path), timeout=timeout
         )
-    except asyncio.TimeoutError as exc:
-        proc.kill()
-        await proc.wait()
-        raise TimeoutError(
-            f"alice context did not return in {timeout}s"
+    except (PermissionError, ConnectionRefusedError, OSError) as exc:
+        raise RuntimeError(
+            f"could not connect to alice socket at {path}: {exc}"
         ) from exc
 
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"alice context exited {proc.returncode}: "
-            f"{stderr_bytes.decode('utf-8', errors='replace').strip()}"
+    try:
+        request = json.dumps({"type": "context"}) + "\n"
+        writer.write(request.encode("utf-8"))
+        await writer.drain()
+        return await asyncio.wait_for(
+            _drain_until_snapshot(reader), timeout=timeout
         )
-
-    snapshot: Optional[dict] = None
-    for line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            f"alice context RPC did not complete in {timeout}s"
+        ) from exc
+    finally:
+        writer.close()
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
+            await writer.wait_closed()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _drain_until_snapshot(reader: asyncio.StreamReader) -> dict[str, Any]:
+    """Pump JSON events off the socket until ``done`` or ``error``.
+
+    Returns the ``context_snapshot`` payload. Raises ``RuntimeError`` if
+    the stream closes early or the daemon emits ``error`` / produces no
+    snapshot.
+    """
+    snapshot: Optional[dict] = None
+    error_msg: Optional[str] = None
+    while True:
+        line = await reader.readline()
+        if not line:
+            raise RuntimeError(
+                "alice closed the socket before a context_snapshot arrived"
+            )
+        try:
+            event = json.loads(line.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
             continue
-        if event.get("type") == "context_snapshot":
+        etype = event.get("type")
+        if etype == "context_snapshot":
             snapshot = event.get("data")
+        elif etype == "error":
+            error_msg = event.get("message") or "unspecified"
+        elif etype == "done":
             break
+    if error_msg is not None:
+        raise RuntimeError(f"alice replied error: {error_msg}")
     if snapshot is None:
-        raise RuntimeError(
-            "alice context produced no context_snapshot event in its output"
-        )
+        raise RuntimeError("no context_snapshot event arrived before done")
     return snapshot
-
-
-def _is_existing_path(p: str) -> bool:
-    import os.path
-
-    return os.path.isabs(p) and os.path.isfile(p) and os.access(p, os.X_OK)
 
 
 def decompose(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -218,4 +245,9 @@ def _approx_tokens_from_chars(chars: int) -> int:
     return max(0, chars // 4)
 
 
-__all__ = ["fetch_snapshot", "decompose", "SNAPSHOT_TIMEOUT_SECONDS"]
+__all__ = [
+    "fetch_snapshot",
+    "decompose",
+    "SNAPSHOT_TIMEOUT_SECONDS",
+    "DEFAULT_SOCKET_PATH",
+]

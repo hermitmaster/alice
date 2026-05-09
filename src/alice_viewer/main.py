@@ -473,15 +473,16 @@ def create_app(paths: Paths | None = None) -> FastAPI:
 
     @app.get("/api/context")
     async def api_context(request: Request):
-        """Fetch the live context snapshot via ``alice context --json``
-        and decompose it into donut-ready components."""
+        """Fetch the live context snapshot from the worker's CLI socket
+        (default ``/state/alice.sock``) and decompose it into donut-ready
+        components."""
         from . import context_probe_client as _probe_client
 
         try:
             snapshot = await _probe_client.fetch_snapshot()
         except FileNotFoundError as exc:
             return JSONResponse(
-                {"error": str(exc), "kind": "no_alice_binary"},
+                {"error": str(exc), "kind": "no_socket"},
                 status_code=503,
             )
         except TimeoutError as exc:
