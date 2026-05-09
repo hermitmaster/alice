@@ -10,6 +10,8 @@
 #   alice "what's on today?"        # one-shot prompt
 #   alice -p "what's on today?"     # one-shot prompt (explicit -p)
 #   alice --json -p "..."           # raw JSON event stream (for agents)
+#   alice context                   # one-shot context-snapshot RPC
+#   alice context --json            # same, raw JSON (viewer / agents)
 #
 # Phase 1 talks to /state/alice.sock via /usr/local/bin/alice-client
 # baked into the worker image. The legacy `claude`-based path used to
@@ -42,9 +44,15 @@ fi
 
 # Build the args we'll pass to alice-client. Bare `alice "prompt"` is
 # friendlier than requiring -p; we promote a non-flag first arg into a
-# -p prompt. Everything starting with - or -- passes through unchanged.
+# -p prompt. The literal verb `context` is special-cased into the
+# context-RPC subcommand so callers can write `alice context --json`
+# without remembering the underlying flag. Everything starting with -
+# or -- passes through unchanged.
 client_args=()
-if [ "$#" -ge 1 ] && [[ "$1" != -* ]]; then
+if [ "$#" -ge 1 ] && [ "$1" = "context" ]; then
+    shift
+    client_args=(--context "$@")
+elif [ "$#" -ge 1 ] && [[ "$1" != -* ]]; then
     client_args=(-p "$*")
 else
     client_args=("$@")

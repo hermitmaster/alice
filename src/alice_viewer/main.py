@@ -453,6 +453,50 @@ def create_app(paths: Paths | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/context", response_class=HTMLResponse)
+    async def context_view(request: Request):
+        """Live snapshot of the speaking daemon's context composition.
+
+        The page itself just renders the chrome + an empty donut; the
+        actual snapshot fetch happens via a separate ``/api/context``
+        call so the operator sees the page immediately and can hit
+        refresh without a hard reload.
+        """
+        return templates.TemplateResponse(
+            request,
+            "context.html",
+            {
+                "state": _state_context(),
+                "active": "context",
+            },
+        )
+
+    @app.get("/api/context")
+    async def api_context(request: Request):
+        """Fetch the live context snapshot via ``alice context --json``
+        and decompose it into donut-ready components."""
+        from . import context_probe_client as _probe_client
+
+        try:
+            snapshot = await _probe_client.fetch_snapshot()
+        except FileNotFoundError as exc:
+            return JSONResponse(
+                {"error": str(exc), "kind": "no_alice_binary"},
+                status_code=503,
+            )
+        except TimeoutError as exc:
+            return JSONResponse(
+                {"error": str(exc), "kind": "timeout"},
+                status_code=504,
+            )
+        except RuntimeError as exc:
+            return JSONResponse(
+                {"error": str(exc), "kind": "rpc_failed"},
+                status_code=502,
+            )
+        decomposed = _probe_client.decompose(snapshot)
+        return JSONResponse(decomposed)
+
     @app.get("/api/narrative/stream")
     async def narrative_stream(request: Request, window: str = "24h", nocache: int = 0):
         """Bucketed narrative: per-time-bucket summaries (cached 7d on disk),

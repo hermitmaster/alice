@@ -13,11 +13,17 @@ Wire protocol (line-delimited JSON, UTF-8):
 
   client → server:
     {"type": "message", "text": "..."}
+    {"type": "context", "include_text": true}      -- read-only RPC; "include_text"
+                                                       defaults to true and controls
+                                                       whether system_prompt /
+                                                       pending_preamble bodies are
+                                                       returned as full strings.
 
   server → client:
     {"type": "ack"}                                -- received, processing
     {"type": "chunk", "text": "..."}               -- one rendered chunk
     {"type": "tool_use", "name": "..."}            -- (optional) trace event
+    {"type": "context_snapshot", "data": {...}}    -- live context composition
     {"type": "done"}                               -- turn ended; reply complete
     {"type": "error", "message": "..."}            -- something went wrong
 
@@ -108,6 +114,7 @@ class CLITransport:
         socket_path: pathlib.Path,
         is_allowed: Optional[ACLCallable] = None,
         principal_name_for: Optional[Callable[[str], str]] = None,
+        context_probe: Optional[object] = None,
     ) -> None:
         self._socket_path = socket_path
         # ACL: defer to the address book when wired by the daemon. When no
@@ -120,6 +127,15 @@ class CLITransport:
         # Optional display-name lookup (address-book backed). Falls back to
         # the legacy ``"local (uid=N)"`` rendering when not supplied.
         self._principal_name_for = principal_name_for
+        # Optional read-only context probe — when set, the socket
+        # accepts ``{"type": "context"}`` requests and replies with a
+        # ``context_snapshot`` event. The daemon constructs the
+        # transport before the probe (the probe depends on TurnRunner
+        # which depends on the transport) so the daemon assigns this
+        # attribute post-hoc. Tests + standalone harnesses can leave
+        # it None; the handler then errors any context request with
+        # ``probe unavailable``.
+        self.context_probe = context_probe
         self._server: Optional[asyncio.AbstractServer] = None
         self._inbox: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=64)
         # connection_id → StreamWriter, so :meth:`send` can find the right
@@ -379,6 +395,9 @@ class CLITransport:
                     continue
 
                 ptype = payload.get("type")
+                if ptype == "context":
+                    await self._handle_context_request(writer, payload)
+                    continue
                 if ptype != "message":
                     await self._write_event(
                         writer,
@@ -428,6 +447,47 @@ class CLITransport:
                 writer.close()
                 await writer.wait_closed()
             log.info("cli connection closed: conn_id=%s", conn_id)
+
+    async def _handle_context_request(
+        self,
+        writer: asyncio.StreamWriter,
+        payload: dict,
+    ) -> None:
+        """Reply to a ``{"type": "context"}`` request with a snapshot of
+        live daemon state.
+
+        Sequence: ``ack`` → ``context_snapshot`` → ``done``. Mirrors the
+        regular message flow so :func:`alice-client.drain_one_turn` can
+        consume the reply without special-casing. Errors (no probe wired,
+        snapshot failure) come back as ``error`` followed by ``done``.
+        """
+        await self._write_event(writer, {"type": "ack"})
+        if self.context_probe is None:
+            await self._write_event(
+                writer,
+                {"type": "error", "message": "context probe unavailable"},
+            )
+            await self._write_event(writer, {"type": "done"})
+            return
+        include_text = bool(payload.get("include_text", True))
+        try:
+            snap = self.context_probe.snapshot(include_text=include_text)
+            data = snap.to_dict()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("context probe snapshot failed")
+            await self._write_event(
+                writer,
+                {
+                    "type": "error",
+                    "message": f"snapshot failed: {type(exc).__name__}: {exc}",
+                },
+            )
+            await self._write_event(writer, {"type": "done"})
+            return
+        await self._write_event(
+            writer, {"type": "context_snapshot", "data": data}
+        )
+        await self._write_event(writer, {"type": "done"})
 
     async def _write_event(
         self,
