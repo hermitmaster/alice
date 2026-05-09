@@ -765,6 +765,23 @@ svg.graph { width: 100%; height: 70vh; background: var(--bg); border-radius: 4px
 .context-blocks .block.selected {
   outline: 2px solid var(--text); outline-offset: 1px;
 }
+.context-legend .lg-tools {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 480px; overflow: auto;
+}
+.context-legend .lg-tool {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: var(--panel-2);
+}
+.context-legend .lg-tool-head { display: flex; align-items: baseline; gap: 8px; }
+.context-legend .lg-tool-name { font-weight: 600; font-size: 12px; color: var(--text); }
+.context-legend .lg-tool-desc {
+  margin: 4px 0; font-size: 11px; color: var(--text);
+}
+.context-legend .lg-tool-schema summary { cursor: pointer; font-size: 11px; padding: 2px 0; }
+.context-legend .lg-tool-schema pre { margin-top: 4px; max-height: 220px; }
 .small { font-size: 11px; }
 @media (max-width: 900px) {
   .context-layout { grid-template-columns: 1fr; }

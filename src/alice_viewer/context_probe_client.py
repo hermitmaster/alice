@@ -189,9 +189,26 @@ def decompose(snapshot: dict[str, Any]) -> dict[str, Any]:
     mcp_total = 0
     for name in sorted(mcp.keys()):
         spec = mcp[name] or {}
-        names = spec.get("tool_names") or []
-        # Pure name-token estimate; same caveat as above.
-        toks = sum(_tokens(n) for n in names) + _tokens(name)
+        defs = spec.get("tools") or []
+        if defs:
+            # Real definitions wired through — count name + description
+            # + serialized input_schema. This is much closer to the
+            # actual on-the-wire tool size the model sees.
+            toks = _tokens(name)
+            for tdef in defs:
+                toks += _tokens(tdef.get("name") or "")
+                toks += _tokens(tdef.get("description") or "")
+                schema = tdef.get("input_schema")
+                if schema:
+                    import json as _json
+
+                    toks += _tokens(_json.dumps(schema, separators=(",", ":")))
+            detail_extra = "with schemas"
+        else:
+            # Fallback: name-only estimate (small, undercount).
+            names = spec.get("tool_names") or []
+            toks = _tokens(name) + sum(_tokens(n) for n in names)
+            detail_extra = "name-only estimate"
         mcp_total += toks
         mcp_components.append(
             {
@@ -199,7 +216,7 @@ def decompose(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "tokens": toks,
                 "detail": (
                     f"{spec.get('tool_count', 0)} tools "
-                    f"({spec.get('type', '?')})"
+                    f"({spec.get('type', '?')}, {detail_extra})"
                 ),
             }
         )

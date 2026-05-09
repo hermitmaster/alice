@@ -71,10 +71,42 @@ def test_mcp_servers_groups_tools_by_prefix():
     assert alice["type"] == "stdio"
     assert alice["tool_count"] == 2
     assert sorted(alice["tool_names"]) == ["resolve_surface", "send_message"]
+    # Without get_mcp_tool_defs wired, every server gets an empty
+    # ``tools`` list — the snapshot consumer can fall back to names.
+    assert alice["tools"] == []
     memory = snap.mcp_servers["memory"]
     assert memory["type"] == "http"
     assert memory["tool_count"] == 1
     assert memory["tool_names"] == ["search"]
+    assert memory["tools"] == []
+
+
+def test_mcp_servers_carries_full_tool_defs_when_wired():
+    """When the daemon supplies tool_defs, each server's entry exposes
+    name + description + input_schema for every tool — that's what backs
+    the viewer's per-tool inspector."""
+    defs = {
+        "alice": [
+            {
+                "name": "send_message",
+                "description": "Send a message to a recipient.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "recipient": {"type": "string"},
+                        "text": {"type": "string"},
+                    },
+                    "required": ["recipient", "text"],
+                },
+            },
+        ],
+    }
+    probe = _build(get_mcp_tool_defs=lambda: defs)
+    snap = probe.snapshot()
+    alice = snap.mcp_servers["alice"]
+    assert alice["tools"][0]["name"] == "send_message"
+    assert "Send a message" in alice["tools"][0]["description"]
+    assert alice["tools"][0]["input_schema"]["properties"]["recipient"]["type"] == "string"
 
 
 def test_mcp_servers_shows_unconfigured_servers_from_tool_prefixes():

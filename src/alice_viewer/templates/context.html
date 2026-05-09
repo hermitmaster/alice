@@ -96,6 +96,10 @@
           if (name.startsWith('mcp:')) {
             const server = name.slice(4);
             const spec = mcp[server] || {};
+            const defs = spec.tools || [];
+            if (defs.length) {
+              return { kind: 'tools', body: defs };
+            }
             return { kind: 'list', body: spec.tool_names || [] };
           }
           return null;
@@ -199,7 +203,8 @@
         }
       }
 
-      function detailHTML(inspect) {
+      function detailHTML(bucket) {
+        const inspect = bucket && bucket.inspect;
         if (!inspect) {
           return '<em class="muted small">nothing to inspect for this bucket.</em>';
         }
@@ -207,7 +212,39 @@
           if (!inspect.body) {
             return '<em class="muted small">empty / not captured.</em>';
           }
-          return `<pre class="lg-text">${escapeHTML(inspect.body)}</pre>`;
+          // Heuristic: when the daemon's persona render is the
+          // placeholder ("You are X. You are talking with Y."), call
+          // that out — most operators expect "the system prompt" to
+          // hold soul/identity, but Alice's harness instructions live
+          // in the cwd's CLAUDE.md (Anthropic auto-injects, opaque to
+          // the probe) plus mcp__alice__read_directive (loaded on
+          // demand, not in the system prompt).
+          const placeholder =
+            bucket.name === 'system prompt' &&
+            inspect.body.length < 200 &&
+            /^You are .+?\.\s*\n.*talking with /m.test(inspect.body);
+          const note = placeholder
+            ? `<p class="muted small">
+                 This is the placeholder render — Alice's mind has no
+                 <code>config/personae.yml</code>. The "soul + identity"
+                 you'd expect here actually lives in:
+                 <ul class="muted small" style="margin:4px 0 0 18px">
+                   <li>Claude Code's own system prompt + auto-loaded
+                       <code>CLAUDE.md</code> in the cwd
+                       (counted by the SDK as "system_prompt" but
+                       opaque to this probe)</li>
+                   <li>The mind's <code>inner/directive.md</code>
+                       (loaded on demand via
+                       <code>mcp__alice__read_directive</code>, not
+                       baked into context until called)</li>
+                   <li>SKILL.md files under the rendered skills dir
+                       (auto-discovered by the SDK as it walks cwd)</li>
+                 </ul>
+                 Drop a <code>personae.yml</code> in the mind's
+                 <code>config/</code> to fill this slot.
+               </p>`
+            : '';
+          return `${note}<pre class="lg-text">${escapeHTML(inspect.body)}</pre>`;
         }
         if (inspect.kind === 'list') {
           if (!inspect.body.length) {
@@ -216,7 +253,45 @@
           const items = inspect.body
             .map((n) => `<li class="mono">${escapeHTML(String(n))}</li>`)
             .join('');
-          return `<ul class="lg-list">${items}</ul>`;
+          let note = '';
+          if (bucket.name === 'builtin tools') {
+            note =
+              `<p class="muted small">These are Anthropic harness ` +
+              `tools (Bash/Read/Write/Edit/Glob/Grep/WebFetch). ` +
+              `Their full schemas live inside Claude Code itself, not ` +
+              `in Alice's daemon — so the probe only sees the names. ` +
+              `Each one weighs ~1-2k tokens of schema in the actual ` +
+              `model context.</p>`;
+          } else if (bucket.name === 'custom tools') {
+            note =
+              `<p class="muted small">All Alice-defined MCP tools, ` +
+              `flat. Click the per-server bucket below to see each ` +
+              `tool's description and JSON Schema.</p>`;
+          }
+          return `${note}<ul class="lg-list">${items}</ul>`;
+        }
+        if (inspect.kind === 'tools') {
+          if (!inspect.body.length) {
+            return '<em class="muted small">no tools.</em>';
+          }
+          const blocks = inspect.body
+            .map((t) => {
+              const schema = JSON.stringify(t.input_schema || {}, null, 2);
+              return `
+                <div class="lg-tool">
+                  <div class="lg-tool-head">
+                    <span class="mono lg-tool-name">${escapeHTML(t.name)}</span>
+                  </div>
+                  <p class="lg-tool-desc">${escapeHTML(t.description || '')}</p>
+                  <details class="lg-tool-schema">
+                    <summary class="muted small">input schema</summary>
+                    <pre class="lg-text">${escapeHTML(schema)}</pre>
+                  </details>
+                </div>
+              `;
+            })
+            .join('');
+          return `<div class="lg-tools">${blocks}</div>`;
         }
         if (inspect.kind === 'note') {
           return `<p class="muted small">${escapeHTML(inspect.body)}</p>`;
@@ -249,7 +324,7 @@
               <span class="lg-tokens mono">${fmtTokens(b.tokens)} tokens</span>
               <span class="lg-pct mono muted">(${pct}%)</span>
             </div>
-            <div class="lg-detail" hidden>${detailHTML(b.inspect)}</div>
+            <div class="lg-detail" hidden>${detailHTML(b)}</div>
           `;
           if (b.detail) {
             li.title = b.detail;
