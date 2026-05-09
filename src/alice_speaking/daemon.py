@@ -443,6 +443,13 @@ class SpeakingDaemon:
             get_mind_dir=lambda: str(self.cfg.mind_dir),
             get_skills_cwd=lambda: str(self._skills_cwd),
         )
+        # Attach the probe to the CLI transport so its
+        # ``{"type": "context"}`` RPC handler can answer requests.
+        # The transport was built earlier (its lifecycle starts before
+        # the probe's dependencies are wired); this is the post-hoc
+        # bind.
+        if self.cli_transport is not None:
+            self.cli_transport.context_probe = self.context_probe
         self._config_path = cfg.mind_dir / "config" / "alice.config.json"
         self._config_mtime: float = (
             self._config_path.stat().st_mtime if self._config_path.is_file() else 0.0
