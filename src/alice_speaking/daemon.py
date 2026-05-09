@@ -86,11 +86,12 @@ from .transports import (
 # routes by ``type(event)``. These re-imports stay so existing
 # external callers (tests, the viewer's narrative dump) keep their
 # ``from alice_speaking.daemon import …Event`` paths working.
+from .diagnostics import ContextProbe
 from .transports.a2a import A2AEvent
 from .transports.cli import CLIEvent
 from .transports.discord import DiscordEvent
 from .transports.signal import SignalEvent
-from .turn_runner import TurnRunner
+from .turn_runner import BUILTIN_TOOLS, TurnRunner
 
 
 log = logging.getLogger("alice_speaking")
@@ -423,6 +424,25 @@ class SpeakingDaemon:
             mind_dir=cfg.mind_dir,
         )
         self.turn_runner.session_id = initial_session_id
+        # ContextProbe — read-only snapshot of the live context
+        # composition for the CLI socket's ``{"type": "context"}``
+        # request. All accessors are lambdas so the probe always
+        # returns current state, never the value at construction
+        # time.
+        self.context_probe = ContextProbe(
+            get_system_prompt=lambda: self._system_prompt,
+            get_builtin_tools=lambda: list(BUILTIN_TOOLS),
+            get_custom_tool_names=lambda: list(self.custom_tool_names),
+            get_mcp_servers=lambda: dict(self.mcp_servers or {}),
+            get_session_id=lambda: self.turn_runner.session_id,
+            get_pending_preamble=lambda: self.turn_runner._pending_preamble,
+            get_current_turn_kind=lambda: self._current_turn_kind,
+            get_model=lambda: self.turn_runner._model
+            or self.cfg.speaking.get("model"),
+            get_backend=lambda: self._model_config.speaking.backend,
+            get_mind_dir=lambda: str(self.cfg.mind_dir),
+            get_skills_cwd=lambda: str(self._skills_cwd),
+        )
         self._config_path = cfg.mind_dir / "config" / "alice.config.json"
         self._config_mtime: float = (
             self._config_path.stat().st_mtime if self._config_path.is_file() else 0.0

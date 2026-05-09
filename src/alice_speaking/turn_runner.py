@@ -70,7 +70,7 @@ SUMMARY_TAIL_TURNS = 5
 # Builtin Anthropic tools the kernel always allows. MCP-supplied
 # tools (Alice's send_message, resolve_surface, etc.) get appended
 # at spec-build time.
-_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch"]
+BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch"]
 
 
 class TurnRunner:
@@ -227,7 +227,7 @@ class TurnRunner:
     def _build_spec(self) -> KernelSpec:
         return KernelSpec(
             model=self._model or self._cfg.speaking.get("model"),
-            allowed_tools=_BUILTIN_TOOLS + self._custom_tool_names,
+            allowed_tools=BUILTIN_TOOLS + self._custom_tool_names,
             mcp_servers=self._mcp_servers,
             cwd=self._skills_cwd or self._cfg.work_dir,
             add_dirs=[self._mind_dir] if self._mind_dir is not None else None,
@@ -391,7 +391,7 @@ class TurnRunner:
         return result.text
 
 
-__all__ = ["SUMMARY_TAIL_TURNS", "TurnRunner"]
+__all__ = ["BUILTIN_TOOLS", "SUMMARY_TAIL_TURNS", "TurnRunner"]
 
 
 class PiSendMessageHandler(NullHandler):
