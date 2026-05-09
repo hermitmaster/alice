@@ -70,14 +70,44 @@
         return String(n);
       }
 
-      function buildBuckets(components, lastTurnInput) {
+      function buildBuckets(components, snapshot, lastTurnInput) {
         // Probe-known components first, each in its own color slot.
+        // Attach the inspect-on-click body for the components we have
+        // text for; the rest get a names list or a clear "not probed"
+        // explanation so clicking is never a dead end.
+        const sysText = ((snapshot.system_prompt || {}).text) || null;
+        const preambleText = ((snapshot.pending_preamble || {}).text) || null;
+        const tools = snapshot.tools || {};
+        const mcp = snapshot.mcp_servers || {};
+
+        const inspectFor = (name) => {
+          if (name === 'system prompt') {
+            return { kind: 'text', body: sysText };
+          }
+          if (name === 'pending preamble') {
+            return { kind: 'text', body: preambleText };
+          }
+          if (name === 'builtin tools') {
+            return { kind: 'list', body: tools.builtin || [] };
+          }
+          if (name === 'custom tools') {
+            return { kind: 'list', body: tools.custom || [] };
+          }
+          if (name.startsWith('mcp:')) {
+            const server = name.slice(4);
+            const spec = mcp[server] || {};
+            return { kind: 'list', body: spec.tool_names || [] };
+          }
+          return null;
+        };
+
         const buckets = components.map((c, i) => ({
           name: c.name,
           tokens: c.tokens,
           detail: c.detail || '',
           color: COLORS[i % COLORS.length],
           source: 'probe',
+          inspect: inspectFor(c.name),
         }));
         const probeTotal = buckets.reduce((s, b) => s + b.tokens, 0);
         // If the SDK's last turn reported more than what the probe sees,
@@ -90,9 +120,26 @@
             detail: `gap between probe view and last turn's input_tokens`,
             color: TRANSCRIPT_COLOR,
             source: 'inferred',
+            inspect: {
+              kind: 'note',
+              body:
+                "The live transcript lives inside the SDK's resumed " +
+                "session JSONL — not exposed by the probe. This bucket " +
+                "is the difference between the daemon's known context " +
+                "(system prompt + tools + MCP + preamble) and the SDK's " +
+                "input_tokens reported on the last turn (input + " +
+                "cache_read + cache_creation). For Anthropic harness " +
+                "chrome and full transcript text, dig in /turns.",
+            },
           });
         }
         return buckets;
+      }
+
+      function bucketKey(b) {
+        // Stable per-bucket id used to associate blocks with legend
+        // rows for click-to-expand.
+        return b.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
       }
 
       function renderBlocks(buckets) {
@@ -105,11 +152,14 @@
             b.tokens > 0 ? 1 : 0,
             Math.round(b.tokens / TOKENS_PER_CELL),
           );
+          const id = bucketKey(b);
           for (let i = 0; i < cells && cellsUsed < CELLS; i++) {
             const div = document.createElement('div');
-            div.className = 'block filled';
+            div.className = 'block filled clickable';
             div.style.background = b.color;
-            div.title = `${b.name}: ${b.tokens.toLocaleString()} tokens`;
+            div.title = `${b.name}: ${b.tokens.toLocaleString()} tokens — click to inspect`;
+            div.dataset.bucketId = id;
+            div.addEventListener('click', () => toggleBucket(id, true));
             grid.appendChild(div);
             cellsUsed++;
           }
@@ -121,6 +171,65 @@
         }
       }
 
+      function toggleBucket(id, scrollIntoView) {
+        document.querySelectorAll('.context-legend li').forEach((el) => {
+          if (el.dataset.bucketId !== id) {
+            el.classList.remove('open');
+            const d = el.querySelector('.lg-detail');
+            if (d) d.hidden = true;
+          }
+        });
+        document.querySelectorAll('.context-blocks .block').forEach((el) => {
+          el.classList.toggle('selected', el.dataset.bucketId === id);
+        });
+        const target = document.querySelector(
+          `.context-legend li[data-bucket-id="${id}"]`,
+        );
+        if (!target) return;
+        const detail = target.querySelector('.lg-detail');
+        const opening = !target.classList.contains('open');
+        target.classList.toggle('open', opening);
+        if (detail) detail.hidden = !opening;
+        if (!opening) {
+          // Closing — clear block selection too.
+          document.querySelectorAll('.context-blocks .block.selected')
+            .forEach((el) => el.classList.remove('selected'));
+        } else if (scrollIntoView) {
+          target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+      }
+
+      function detailHTML(inspect) {
+        if (!inspect) {
+          return '<em class="muted small">nothing to inspect for this bucket.</em>';
+        }
+        if (inspect.kind === 'text') {
+          if (!inspect.body) {
+            return '<em class="muted small">empty / not captured.</em>';
+          }
+          return `<pre class="lg-text">${escapeHTML(inspect.body)}</pre>`;
+        }
+        if (inspect.kind === 'list') {
+          if (!inspect.body.length) {
+            return '<em class="muted small">no entries.</em>';
+          }
+          const items = inspect.body
+            .map((n) => `<li class="mono">${escapeHTML(String(n))}</li>`)
+            .join('');
+          return `<ul class="lg-list">${items}</ul>`;
+        }
+        if (inspect.kind === 'note') {
+          return `<p class="muted small">${escapeHTML(inspect.body)}</p>`;
+        }
+        return '';
+      }
+
+      function escapeHTML(s) {
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+      }
+
       function renderLegend(buckets, totalUsed) {
         const ul = $('context-legend');
         ul.innerHTML = '';
@@ -128,27 +237,40 @@
           const pct = TOTAL_TOKENS > 0
             ? ((b.tokens / TOTAL_TOKENS) * 100).toFixed(1)
             : '0';
+          const id = bucketKey(b);
           const li = document.createElement('li');
+          li.dataset.bucketId = id;
+          li.classList.add('clickable');
           li.innerHTML = `
-            <span class="sw" style="background:${b.color}"></span>
-            <span class="lg-name">${b.name}</span>
-            <span class="lg-tokens mono">${fmtTokens(b.tokens)} tokens</span>
-            <span class="lg-pct mono muted">(${pct}%)</span>
+            <div class="lg-row">
+              <span class="lg-caret">▸</span>
+              <span class="sw" style="background:${b.color}"></span>
+              <span class="lg-name">${escapeHTML(b.name)}</span>
+              <span class="lg-tokens mono">${fmtTokens(b.tokens)} tokens</span>
+              <span class="lg-pct mono muted">(${pct}%)</span>
+            </div>
+            <div class="lg-detail" hidden>${detailHTML(b.inspect)}</div>
           `;
           if (b.detail) {
             li.title = b.detail;
           }
+          li.querySelector('.lg-row').addEventListener('click', () =>
+            toggleBucket(id, false),
+          );
           ul.appendChild(li);
         }
-        // Free space row
+        // Free space row — not clickable (nothing to show).
         const free = Math.max(0, TOTAL_TOKENS - totalUsed);
         const freePct = ((free / TOTAL_TOKENS) * 100).toFixed(1);
         const li = document.createElement('li');
         li.innerHTML = `
-          <span class="sw empty-marker"></span>
-          <span class="lg-name muted">free space</span>
-          <span class="lg-tokens mono muted">${fmtTokens(free)} tokens</span>
-          <span class="lg-pct mono muted">(${freePct}%)</span>
+          <div class="lg-row">
+            <span class="lg-caret invisible">▸</span>
+            <span class="sw empty-marker"></span>
+            <span class="lg-name muted">free space</span>
+            <span class="lg-tokens mono muted">${fmtTokens(free)} tokens</span>
+            <span class="lg-pct mono muted">(${freePct}%)</span>
+          </div>
         `;
         ul.appendChild(li);
       }
@@ -180,6 +302,7 @@
 
           const buckets = buildBuckets(
             data.components,
+            data.snapshot || {},
             PAGE.last_turn_input_tokens,
           );
           const totalUsed = buckets.reduce((s, b) => s + b.tokens, 0);

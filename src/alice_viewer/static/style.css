@@ -713,14 +713,23 @@ svg.graph { width: 100%; height: 70vh; background: var(--bg); border-radius: 4px
   display: flex; flex-direction: column; gap: 4px;
   font-size: 12px;
 }
-.context-legend li {
+.context-legend li { padding: 0; }
+.context-legend .lg-row {
   display: grid;
-  grid-template-columns: 18px 1fr auto auto;
+  grid-template-columns: 14px 18px 1fr auto auto;
   gap: 10px; align-items: center;
-  padding: 3px 6px;
+  padding: 5px 8px;
   border-radius: 3px;
 }
-.context-legend li:hover { background: var(--panel-2); }
+.context-legend li.clickable .lg-row { cursor: pointer; }
+.context-legend li.clickable .lg-row:hover { background: var(--panel-2); }
+.context-legend li.open .lg-row { background: var(--panel-2); }
+.context-legend .lg-caret {
+  font-size: 10px; color: var(--muted); transition: transform 0.12s ease;
+  display: inline-block; width: 10px; text-align: center;
+}
+.context-legend .lg-caret.invisible { visibility: hidden; }
+.context-legend li.open .lg-caret { transform: rotate(90deg); }
 .context-legend .sw {
   display: inline-block; width: 12px; height: 12px; border-radius: 2px;
 }
@@ -729,6 +738,33 @@ svg.graph { width: 100%; height: 70vh; background: var(--bg); border-radius: 4px
 }
 .context-legend .lg-name { color: var(--text); }
 .context-legend .lg-tokens, .context-legend .lg-pct { text-align: right; }
+.context-legend .lg-detail {
+  margin: 4px 0 8px 36px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.context-legend .lg-text {
+  margin: 0; padding: 0;
+  font-family: var(--mono, monospace); font-size: 11px;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 380px; overflow: auto;
+  color: var(--text);
+}
+.context-legend .lg-list {
+  margin: 0; padding-left: 18px;
+  max-height: 280px; overflow: auto;
+}
+.context-legend .lg-list li {
+  font-size: 11px; color: var(--text); padding: 1px 0;
+}
+.context-blocks .block.clickable { cursor: pointer; }
+.context-blocks .block.clickable:hover { outline: 1px solid var(--text); outline-offset: 1px; }
+.context-blocks .block.selected {
+  outline: 2px solid var(--text); outline-offset: 1px;
+}
 .small { font-size: 11px; }
 @media (max-width: 900px) {
   .context-layout { grid-template-columns: 1fr; }
