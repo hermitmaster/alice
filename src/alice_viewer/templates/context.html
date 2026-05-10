@@ -11,108 +11,347 @@
 
   <div id="context-error" class="context-error" hidden></div>
 
-  <div class="context-grid" id="context-grid" hidden>
-    <div class="context-donut-wrap">
-      <svg id="context-donut" class="context-donut"></svg>
-      <div class="context-donut-center">
-        <div class="context-donut-total" id="context-donut-total">—</div>
-        <div class="context-donut-label muted">approx tokens</div>
+  <div class="context-layout" id="context-layout" hidden>
+    <div class="context-blocks-pane">
+      <div class="context-blocks-meta">
+        <div><span class="k">model</span> <span id="context-model" class="mono">—</span></div>
+        <div><span class="k">window</span> <span id="context-window" class="mono">—</span></div>
+        <div><span class="k">used</span> <span id="context-used" class="mono">—</span></div>
+      </div>
+      <div class="context-blocks" id="context-blocks"></div>
+      <div class="context-blocks-foot">
+        <span><span class="sw filled-marker"></span> filled (probe + transcript)</span>
+        <span><span class="sw empty-marker"></span> free</span>
       </div>
     </div>
 
     <div class="context-side">
       <div class="context-meta">
-        <div class="metric"><span class="k">model</span><span class="v" id="context-model">—</span></div>
         <div class="metric"><span class="k">backend</span><span class="v" id="context-backend">—</span></div>
         <div class="metric"><span class="k">session</span><span class="v mono" id="context-session">—</span></div>
         <div class="metric"><span class="k">in flight</span><span class="v" id="context-inflight">—</span></div>
       </div>
 
-      <h3>breakdown</h3>
-      <div class="table-wrap">
-        <table class="context-breakdown">
-          <thead>
-            <tr><th>component</th><th class="num">~tokens</th><th class="num">%</th><th>detail</th></tr>
-          </thead>
-          <tbody id="context-rows"></tbody>
-          <tfoot>
-            <tr>
-              <td><b>total (probe view)</b></td>
-              <td class="num mono" id="context-total-tokens">—</td>
-              <td class="num">100%</td>
-              <td class="muted">excludes SDK chrome and live transcript</td>
-            </tr>
-            {% if state.speaking_usage and state.speaking_usage.context %}
-              {% set ctx = state.speaking_usage.context %}
-              <tr>
-                <td><b>last turn (SDK)</b></td>
-                <td class="num mono">{{ ctx.input | tokens }}</td>
-                <td class="num muted">—</td>
-                <td class="muted">input_tokens, last turn ({{ state.speaking_usage.ts | ago }})</td>
-              </tr>
-            {% endif %}
-          </tfoot>
-        </table>
-      </div>
+      <h3>Estimated usage by category</h3>
+      <ul class="context-legend" id="context-legend"></ul>
 
       <p class="muted small">
-        Token counts are approximate (cl100k_base, name-only for tool defs).
-        The probe sees what Alice's daemon assembles before the SDK call;
-        Anthropic's harness adds its own system prompt + tool schemas on top,
-        and the live transcript inside the resumed session is opaque to us —
-        that's the gap between "probe view" and "last turn (SDK)".
+        Each cell is one block of the model's context window
+        (<span id="context-cell-tokens" class="mono">—</span> tokens).
+        Probe components are what Alice's daemon assembles before the SDK
+        call. The "live transcript" bucket is the gap between that and the
+        last turn's actual SDK <code>input_tokens</code> — Anthropic's
+        harness chrome plus the resumed-session transcript that's opaque
+        to us.
       </p>
     </div>
   </div>
 
+  <script id="context-page-data" type="application/json">{{ context_page_data | safe }}</script>
   <script>
     (() => {
+      const PAGE = JSON.parse(
+        document.getElementById('context-page-data').textContent
+      );
+      const TOTAL_TOKENS = PAGE.context_window;
+      const CELLS = 200;
+      const COLS = 20;
+      const TOKENS_PER_CELL = TOTAL_TOKENS / CELLS;
       const COLORS = [
         '#8fc7ff', '#c39bff', '#7de3c4', '#ffd66b', '#ff9b6b',
         '#ff7a9b', '#9bd6ff', '#b6ffc6', '#ffe28a', '#d4a4ff',
       ];
+      const TRANSCRIPT_COLOR = '#5a6478';
       const $ = (id) => document.getElementById(id);
 
-      function renderDonut(components) {
-        const svg = d3.select('#context-donut');
-        svg.selectAll('*').remove();
-        const bbox = svg.node().getBoundingClientRect();
-        const size = Math.min(bbox.width, bbox.height) || 240;
-        const radius = size / 2;
-        const inner = radius * 0.62;
-        svg.attr('viewBox', [-radius, -radius, size, size]);
-
-        const pie = d3.pie().sort(null).value(d => d.tokens);
-        const arc = d3.arc().innerRadius(inner).outerRadius(radius - 4);
-        const arcs = pie(components);
-
-        svg.selectAll('path').data(arcs).join('path')
-          .attr('d', arc)
-          .attr('fill', (_d, i) => COLORS[i % COLORS.length])
-          .attr('stroke', '#0f1218')
-          .attr('stroke-width', 2)
-          .append('title').text(d => `${d.data.name}: ${d.data.tokens} tokens`);
+      function fmtTokens(n) {
+        if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+        if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+        return String(n);
       }
 
-      function renderRows(components, total) {
-        const tbody = $('context-rows');
-        tbody.innerHTML = '';
-        components.forEach((c, i) => {
-          const tr = document.createElement('tr');
-          const sw = `<span class="sw" style="background:${COLORS[i % COLORS.length]}"></span>`;
-          const pct = total > 0 ? ((c.tokens / total) * 100).toFixed(1) : '0';
-          tr.innerHTML = `
-            <td>${sw}<span class="mono">${c.name}</span></td>
-            <td class="num mono">${c.tokens.toLocaleString()}</td>
-            <td class="num mono">${pct}%</td>
-            <td class="muted small">${c.detail || ''}</td>
-          `;
-          tbody.appendChild(tr);
+      function buildBuckets(components, snapshot, lastTurnInput) {
+        // Probe-known components first, each in its own color slot.
+        // Attach the inspect-on-click body for the components we have
+        // text for; the rest get a names list or a clear "not probed"
+        // explanation so clicking is never a dead end.
+        const sysText = ((snapshot.system_prompt || {}).text) || null;
+        const preambleText = ((snapshot.pending_preamble || {}).text) || null;
+        const tools = snapshot.tools || {};
+        const mcp = snapshot.mcp_servers || {};
+
+        const inspectFor = (name) => {
+          if (name === 'system prompt') {
+            return { kind: 'text', body: sysText };
+          }
+          if (name === 'pending preamble') {
+            return { kind: 'text', body: preambleText };
+          }
+          if (name === 'builtin tools') {
+            return { kind: 'list', body: tools.builtin || [] };
+          }
+          if (name === 'custom tools') {
+            return { kind: 'list', body: tools.custom || [] };
+          }
+          if (name.startsWith('mcp:')) {
+            const server = name.slice(4);
+            const spec = mcp[server] || {};
+            const defs = spec.tools || [];
+            if (defs.length) {
+              return { kind: 'tools', body: defs };
+            }
+            return { kind: 'list', body: spec.tool_names || [] };
+          }
+          return null;
+        };
+
+        const buckets = components.map((c, i) => ({
+          name: c.name,
+          tokens: c.tokens,
+          detail: c.detail || '',
+          color: COLORS[i % COLORS.length],
+          source: 'probe',
+          inspect: inspectFor(c.name),
+        }));
+        const probeTotal = buckets.reduce((s, b) => s + b.tokens, 0);
+        // If the SDK's last turn reported more than what the probe sees,
+        // attribute the gap to "live transcript" so the operator can see
+        // it. If less (rare — first turn), no gap bucket.
+        if (lastTurnInput && lastTurnInput > probeTotal) {
+          buckets.push({
+            name: 'live transcript (estimated)',
+            tokens: lastTurnInput - probeTotal,
+            detail: `gap between probe view and last turn's input_tokens`,
+            color: TRANSCRIPT_COLOR,
+            source: 'inferred',
+            inspect: {
+              kind: 'note',
+              body:
+                "The live transcript lives inside the SDK's resumed " +
+                "session JSONL — not exposed by the probe. This bucket " +
+                "is the difference between the daemon's known context " +
+                "(system prompt + tools + MCP + preamble) and the SDK's " +
+                "input_tokens reported on the last turn (input + " +
+                "cache_read + cache_creation). For Anthropic harness " +
+                "chrome and full transcript text, dig in /turns.",
+            },
+          });
+        }
+        return buckets;
+      }
+
+      function bucketKey(b) {
+        // Stable per-bucket id used to associate blocks with legend
+        // rows for click-to-expand.
+        return b.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      }
+
+      function renderBlocks(buckets) {
+        const grid = $('context-blocks');
+        grid.innerHTML = '';
+        grid.style.setProperty('--cols', COLS);
+        let cellsUsed = 0;
+        for (const b of buckets) {
+          const cells = Math.max(
+            b.tokens > 0 ? 1 : 0,
+            Math.round(b.tokens / TOKENS_PER_CELL),
+          );
+          const id = bucketKey(b);
+          for (let i = 0; i < cells && cellsUsed < CELLS; i++) {
+            const div = document.createElement('div');
+            div.className = 'block filled clickable';
+            div.style.background = b.color;
+            div.title = `${b.name}: ${b.tokens.toLocaleString()} tokens — click to inspect`;
+            div.dataset.bucketId = id;
+            div.addEventListener('click', () => toggleBucket(id, true));
+            grid.appendChild(div);
+            cellsUsed++;
+          }
+        }
+        for (let i = cellsUsed; i < CELLS; i++) {
+          const div = document.createElement('div');
+          div.className = 'block empty';
+          grid.appendChild(div);
+        }
+      }
+
+      function toggleBucket(id, scrollIntoView) {
+        document.querySelectorAll('.context-legend li').forEach((el) => {
+          if (el.dataset.bucketId !== id) {
+            el.classList.remove('open');
+            const d = el.querySelector('.lg-detail');
+            if (d) d.hidden = true;
+          }
         });
+        document.querySelectorAll('.context-blocks .block').forEach((el) => {
+          el.classList.toggle('selected', el.dataset.bucketId === id);
+        });
+        const target = document.querySelector(
+          `.context-legend li[data-bucket-id="${id}"]`,
+        );
+        if (!target) return;
+        const detail = target.querySelector('.lg-detail');
+        const opening = !target.classList.contains('open');
+        target.classList.toggle('open', opening);
+        if (detail) detail.hidden = !opening;
+        if (!opening) {
+          // Closing — clear block selection too.
+          document.querySelectorAll('.context-blocks .block.selected')
+            .forEach((el) => el.classList.remove('selected'));
+        } else if (scrollIntoView) {
+          target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+      }
+
+      function detailHTML(bucket) {
+        const inspect = bucket && bucket.inspect;
+        if (!inspect) {
+          return '<em class="muted small">nothing to inspect for this bucket.</em>';
+        }
+        if (inspect.kind === 'text') {
+          if (!inspect.body) {
+            return '<em class="muted small">empty / not captured.</em>';
+          }
+          // Heuristic: when the daemon's persona render is the
+          // placeholder ("You are X. You are talking with Y."), call
+          // that out — most operators expect "the system prompt" to
+          // hold soul/identity, but Alice's harness instructions live
+          // in the cwd's CLAUDE.md (Anthropic auto-injects, opaque to
+          // the probe) plus mcp__alice__read_directive (loaded on
+          // demand, not in the system prompt).
+          const placeholder =
+            bucket.name === 'system prompt' &&
+            inspect.body.length < 200 &&
+            /^You are .+?\.\s*\n.*talking with /m.test(inspect.body);
+          const note = placeholder
+            ? `<p class="muted small">
+                 This is the placeholder render — Alice's mind has no
+                 <code>config/personae.yml</code>. The "soul + identity"
+                 you'd expect here actually lives in:
+                 <ul class="muted small" style="margin:4px 0 0 18px">
+                   <li>Claude Code's own system prompt + auto-loaded
+                       <code>CLAUDE.md</code> in the cwd
+                       (counted by the SDK as "system_prompt" but
+                       opaque to this probe)</li>
+                   <li>The mind's <code>inner/directive.md</code>
+                       (loaded on demand via
+                       <code>mcp__alice__read_directive</code>, not
+                       baked into context until called)</li>
+                   <li>SKILL.md files under the rendered skills dir
+                       (auto-discovered by the SDK as it walks cwd)</li>
+                 </ul>
+                 Drop a <code>personae.yml</code> in the mind's
+                 <code>config/</code> to fill this slot.
+               </p>`
+            : '';
+          return `${note}<pre class="lg-text">${escapeHTML(inspect.body)}</pre>`;
+        }
+        if (inspect.kind === 'list') {
+          if (!inspect.body.length) {
+            return '<em class="muted small">no entries.</em>';
+          }
+          const items = inspect.body
+            .map((n) => `<li class="mono">${escapeHTML(String(n))}</li>`)
+            .join('');
+          let note = '';
+          if (bucket.name === 'builtin tools') {
+            note =
+              `<p class="muted small">These are Anthropic harness ` +
+              `tools (Bash/Read/Write/Edit/Glob/Grep/WebFetch). ` +
+              `Their full schemas live inside Claude Code itself, not ` +
+              `in Alice's daemon — so the probe only sees the names. ` +
+              `Each one weighs ~1-2k tokens of schema in the actual ` +
+              `model context.</p>`;
+          } else if (bucket.name === 'custom tools') {
+            note =
+              `<p class="muted small">All Alice-defined MCP tools, ` +
+              `flat. Click the per-server bucket below to see each ` +
+              `tool's description and JSON Schema.</p>`;
+          }
+          return `${note}<ul class="lg-list">${items}</ul>`;
+        }
+        if (inspect.kind === 'tools') {
+          if (!inspect.body.length) {
+            return '<em class="muted small">no tools.</em>';
+          }
+          const blocks = inspect.body
+            .map((t) => {
+              const schema = JSON.stringify(t.input_schema || {}, null, 2);
+              return `
+                <div class="lg-tool">
+                  <div class="lg-tool-head">
+                    <span class="mono lg-tool-name">${escapeHTML(t.name)}</span>
+                  </div>
+                  <p class="lg-tool-desc">${escapeHTML(t.description || '')}</p>
+                  <details class="lg-tool-schema">
+                    <summary class="muted small">input schema</summary>
+                    <pre class="lg-text">${escapeHTML(schema)}</pre>
+                  </details>
+                </div>
+              `;
+            })
+            .join('');
+          return `<div class="lg-tools">${blocks}</div>`;
+        }
+        if (inspect.kind === 'note') {
+          return `<p class="muted small">${escapeHTML(inspect.body)}</p>`;
+        }
+        return '';
+      }
+
+      function escapeHTML(s) {
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+      }
+
+      function renderLegend(buckets, totalUsed) {
+        const ul = $('context-legend');
+        ul.innerHTML = '';
+        for (const b of buckets) {
+          const pct = TOTAL_TOKENS > 0
+            ? ((b.tokens / TOTAL_TOKENS) * 100).toFixed(1)
+            : '0';
+          const id = bucketKey(b);
+          const li = document.createElement('li');
+          li.dataset.bucketId = id;
+          li.classList.add('clickable');
+          li.innerHTML = `
+            <div class="lg-row">
+              <span class="lg-caret">▸</span>
+              <span class="sw" style="background:${b.color}"></span>
+              <span class="lg-name">${escapeHTML(b.name)}</span>
+              <span class="lg-tokens mono">${fmtTokens(b.tokens)} tokens</span>
+              <span class="lg-pct mono muted">(${pct}%)</span>
+            </div>
+            <div class="lg-detail" hidden>${detailHTML(b)}</div>
+          `;
+          if (b.detail) {
+            li.title = b.detail;
+          }
+          li.querySelector('.lg-row').addEventListener('click', () =>
+            toggleBucket(id, false),
+          );
+          ul.appendChild(li);
+        }
+        // Free space row — not clickable (nothing to show).
+        const free = Math.max(0, TOTAL_TOKENS - totalUsed);
+        const freePct = ((free / TOTAL_TOKENS) * 100).toFixed(1);
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <div class="lg-row">
+            <span class="lg-caret invisible">▸</span>
+            <span class="sw empty-marker"></span>
+            <span class="lg-name muted">free space</span>
+            <span class="lg-tokens mono muted">${fmtTokens(free)} tokens</span>
+            <span class="lg-pct mono muted">(${freePct}%)</span>
+          </div>
+        `;
+        ul.appendChild(li);
       }
 
       function showError(msg) {
-        $('context-grid').hidden = true;
+        $('context-layout').hidden = true;
         const e = $('context-error');
         e.hidden = false;
         e.textContent = msg;
@@ -120,7 +359,7 @@
 
       function clearError() {
         $('context-error').hidden = true;
-        $('context-grid').hidden = false;
+        $('context-layout').hidden = false;
       }
 
       async function refresh() {
@@ -135,16 +374,29 @@
           }
           const data = await resp.json();
           clearError();
-          renderDonut(data.components);
-          renderRows(data.components, data.total_tokens);
-          $('context-donut-total').textContent = data.total_tokens.toLocaleString();
-          $('context-total-tokens').textContent = data.total_tokens.toLocaleString();
+
+          const buckets = buildBuckets(
+            data.components,
+            data.snapshot || {},
+            PAGE.last_turn_input_tokens,
+          );
+          const totalUsed = buckets.reduce((s, b) => s + b.tokens, 0);
+
+          renderBlocks(buckets);
+          renderLegend(buckets, totalUsed);
+
           const snap = data.snapshot || {};
           $('context-model').textContent = snap.model || '—';
+          $('context-window').textContent = `${fmtTokens(TOTAL_TOKENS)} ctx`;
+          const pct = ((totalUsed / TOTAL_TOKENS) * 100).toFixed(1);
+          $('context-used').textContent =
+            `${fmtTokens(totalUsed)} / ${fmtTokens(TOTAL_TOKENS)} (${pct}%)`;
           $('context-backend').textContent = snap.backend || '—';
           $('context-session').textContent = snap.session_id || '(cold)';
           $('context-inflight').textContent =
             snap.in_flight ? `yes · ${snap.in_flight.turn_kind}` : 'no';
+          $('context-cell-tokens').textContent = fmtTokens(TOKENS_PER_CELL);
+
           const stamp = new Date().toLocaleTimeString();
           $('context-status').textContent = `updated ${stamp}`;
         } catch (err) {

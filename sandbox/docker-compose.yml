@@ -34,6 +34,14 @@ x-worker-base: &worker-base
     STATE_DIR: "/state/worker"
     TZ: "${ALICE_TZ:-America/New_York}"
     PATH: "/home/alice/alice-tools/bin:/home/alice/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    # CLI transport socket — moved from container-local /tmp to the
+    # host-shared /state mount so the viewer container (which also
+    # bind-mounts the same host dir) can talk to it for the /context
+    # tab. Real Linux Docker supports AF_UNIX on bind mounts; the
+    # /tmp default in alice_speaking.infra.config is conservative for
+    # virtiofs/9p (Rancher Desktop / Docker Desktop on macOS) where
+    # bind() returns EPERM on cross-VM unix sockets.
+    ALICE_CLI_SOCKET: "/state/alice.sock"
     # s6-overlay's default 3-second graceperiod is far too short for the
     # speaking/thinker drain on shutdown: a SIGTERM during a Claude turn
     # or an alice-think wake can legitimately take minutes to finish

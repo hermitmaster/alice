@@ -73,6 +73,9 @@ class ContextProbe:
         get_backend: Callable[[], Optional[str]],
         get_mind_dir: Callable[[], Optional[str]],
         get_skills_cwd: Callable[[], Optional[str]],
+        get_mcp_tool_defs: Optional[
+            Callable[[], dict[str, list[dict[str, Any]]]]
+        ] = None,
     ) -> None:
         self._get_system_prompt = get_system_prompt
         self._get_builtin_tools = get_builtin_tools
@@ -85,6 +88,12 @@ class ContextProbe:
         self._get_backend = get_backend
         self._get_mind_dir = get_mind_dir
         self._get_skills_cwd = get_skills_cwd
+        # Optional — when wired by the daemon, snapshot.mcp_servers
+        # carries the full per-tool {name, description, input_schema}
+        # for each MCP server. Tests + harnesses that don't have access
+        # to the SdkMcpTool list can omit this; the snapshot then
+        # falls back to name-only summaries.
+        self._get_mcp_tool_defs = get_mcp_tool_defs
 
     def snapshot(self, *, include_text: bool = True) -> ContextSnapshot:
         """Capture a point-in-time view of context composition.
@@ -102,7 +111,12 @@ class ContextProbe:
         custom = self._get_custom_tool_names() or []
         builtin = self._get_builtin_tools() or []
         mcp_servers_raw = self._get_mcp_servers() or {}
-        mcp_servers = _summarize_mcp_servers(mcp_servers_raw, custom)
+        tool_defs = (
+            self._get_mcp_tool_defs() if self._get_mcp_tool_defs else {}
+        ) or {}
+        mcp_servers = _summarize_mcp_servers(
+            mcp_servers_raw, custom, tool_defs
+        )
 
         in_flight_kind = self._get_current_turn_kind()
 
@@ -140,13 +154,20 @@ class ContextProbe:
 def _summarize_mcp_servers(
     mcp_servers: dict[str, Any],
     custom_tool_names: list[str],
+    tool_defs: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Group ``custom_tool_names`` (which look like ``mcp__<server>__<tool>``)
     by server, and merge with the configured ``mcp_servers`` dict so the
     operator sees both "what's wired" and "what tools each server
     exposes." Servers with no tools listed (e.g. http-only servers the
     SDK hasn't introspected yet) still appear with an empty tool list.
+
+    When ``tool_defs`` is supplied, each server's entry also gets a
+    ``tools`` key carrying the per-tool ``{name, description,
+    input_schema}`` dicts — this is what the viewer's /context tab
+    uses to show actual schemas instead of bare names.
     """
+    tool_defs = tool_defs or {}
     by_server: dict[str, list[str]] = {}
     for full in custom_tool_names:
         if not full.startswith("mcp__"):
@@ -160,10 +181,12 @@ def _summarize_mcp_servers(
     summary: dict[str, dict[str, Any]] = {}
     for server, spec in (mcp_servers or {}).items():
         tools = sorted(by_server.get(server, []))
+        defs = tool_defs.get(server) or []
         summary[server] = {
             "type": _server_type(spec),
             "tool_count": len(tools),
             "tool_names": tools,
+            "tools": defs,
         }
     # Include any servers we discovered from tool prefixes but that
     # aren't in the configured dict — defensive against config-vs-runtime
@@ -175,6 +198,7 @@ def _summarize_mcp_servers(
             "type": "unknown",
             "tool_count": len(tools),
             "tool_names": sorted(tools),
+            "tools": tool_defs.get(server) or [],
         }
     return summary
 

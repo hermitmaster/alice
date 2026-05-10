@@ -4,9 +4,9 @@ Two layers:
 
 - ``decompose`` is a pure function over a snapshot dict; tested
   directly with synthetic input.
-- The route + ``fetch_snapshot`` is exercised end-to-end with the real
-  FastAPI app (via httpx.AsyncClient) and a stubbed alice binary that
-  emits the JSON snapshot on stdout — no docker, no daemon.
+- ``fetch_snapshot`` is exercised end-to-end against a real
+  :class:`CLITransport` listening on a tempdir Unix socket — same
+  pattern as ``tests/test_cli_context_request.py``.
 """
 
 from __future__ import annotations
@@ -15,11 +15,13 @@ import asyncio
 import json
 import os
 import pathlib
-import stat
-import textwrap
+import threading
+from typing import Optional
 
 import pytest
 
+from alice_speaking.diagnostics import ContextProbe
+from alice_speaking.transports.cli import CLITransport
 from alice_viewer import context_probe_client
 
 
@@ -95,92 +97,112 @@ def test_decompose_falls_back_to_chars_when_text_omitted():
 
 
 # ----------------------------------------------------------------------------
-# fetch_snapshot() — subprocess-shape tests using a stubbed binary
+# fetch_snapshot() — talks to a real CLITransport over a tempdir socket
 
 
-def _write_stub(
-    bin_path: pathlib.Path,
-    *,
-    stdout: str = "",
-    stderr: str = "",
-    exit_code: int = 0,
-    sleep_seconds: float = 0.0,
-) -> None:
-    """Write an executable shell script that prints ``stdout`` and exits
-    with ``exit_code``. Used to stand in for the real bin/alice. The
-    body is left-aligned (no leading whitespace) because Linux kernels
-    refuse to exec a script whose shebang isn't at column 0."""
-    lines = [
-        "#!/bin/sh",
-        f"sleep {sleep_seconds:g}" if sleep_seconds > 0 else "",
-        "cat <<'__OUT__'",
-        stdout,
-        "__OUT__",
-    ]
-    if stderr:
-        lines += ["cat >&2 <<'__ERR__'", stderr, "__ERR__"]
-    lines.append(f"exit {exit_code}")
-    body = "\n".join(line for line in lines if line is not None) + "\n"
-    bin_path.write_text(body)
-    bin_path.chmod(bin_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+def _make_probe(**overrides) -> ContextProbe:
+    defaults = {
+        "get_system_prompt": lambda: "you are alice.",
+        "get_builtin_tools": lambda: ["Bash", "Read"],
+        "get_custom_tool_names": lambda: ["mcp__alice__send_message"],
+        "get_mcp_servers": lambda: {"alice": {"type": "stdio"}},
+        "get_session_id": lambda: "sess-abc",
+        "get_pending_preamble": lambda: None,
+        "get_current_turn_kind": lambda: None,
+        "get_model": lambda: "claude-sonnet-4-5",
+        "get_backend": lambda: "subscription",
+        "get_mind_dir": lambda: "/m",
+        "get_skills_cwd": lambda: "/s",
+    }
+    defaults.update(overrides)
+    return ContextProbe(**defaults)
 
 
-def test_fetch_snapshot_parses_first_snapshot_event(tmp_path):
-    snapshot = _example_snapshot()
-    payload = "\n".join(
-        [
-            json.dumps({"type": "ack"}),
-            json.dumps({"type": "context_snapshot", "data": snapshot}),
-            json.dumps({"type": "done"}),
-        ]
+@pytest.fixture
+def loop_thread():
+    """Background-thread event loop so the test can drive both the
+    transport (server side) and ``fetch_snapshot`` (client side, also
+    async) without nesting event loops."""
+    loop = asyncio.new_event_loop()
+
+    def _target():
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    yield loop
+    loop.call_soon_threadsafe(loop.stop)
+    t.join(timeout=2.0)
+    loop.close()
+
+
+def _run(loop, coro):
+    return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=5.0)
+
+
+async def _start_transport(
+    socket_path: pathlib.Path,
+    probe: Optional[ContextProbe],
+) -> CLITransport:
+    transport = CLITransport(
+        socket_path=socket_path,
+        is_allowed=lambda uid: uid == str(os.getuid()),
+        context_probe=probe,
     )
-    stub = tmp_path / "alice"
-    _write_stub(stub, stdout=payload)
-    result = asyncio.run(
-        context_probe_client.fetch_snapshot(alice_bin=str(stub))
-    )
-    assert result == snapshot
+    await transport.start()
+    return transport
 
 
-def test_fetch_snapshot_raises_on_nonzero_exit(tmp_path):
-    stub = tmp_path / "alice"
-    _write_stub(stub, stdout="", stderr="boom", exit_code=3)
-    with pytest.raises(RuntimeError) as exc_info:
-        asyncio.run(context_probe_client.fetch_snapshot(alice_bin=str(stub)))
-    assert "exited 3" in str(exc_info.value)
+def test_fetch_snapshot_returns_snapshot_payload(tmp_path, loop_thread):
+    sock_path = tmp_path / "alice.sock"
+    transport = _run(loop_thread, _start_transport(sock_path, _make_probe()))
+    try:
+        snapshot = asyncio.run(
+            context_probe_client.fetch_snapshot(socket_path=str(sock_path))
+        )
+    finally:
+        _run(loop_thread, transport.stop())
+    assert snapshot["session_id"] == "sess-abc"
+    assert snapshot["model"] == "claude-sonnet-4-5"
+    assert snapshot["tools"]["count"] == 2 + 1
 
 
-def test_fetch_snapshot_raises_on_missing_binary(tmp_path):
-    """When the executable doesn't exist on PATH or as an absolute file,
-    callers see FileNotFoundError so the route can return a friendly
-    'no worker' status."""
-    missing = tmp_path / "definitely-not-installed-anywhere"
+def test_fetch_snapshot_raises_filenotfound_when_socket_missing(tmp_path):
+    """No socket file on disk → FileNotFoundError so the route returns
+    a friendly 'worker not up' status."""
     with pytest.raises(FileNotFoundError):
         asyncio.run(
-            context_probe_client.fetch_snapshot(alice_bin=str(missing))
-        )
-
-
-def test_fetch_snapshot_raises_when_no_snapshot_event(tmp_path):
-    """The wrapper exited 0 but produced no context_snapshot — caller
-    sees a clear error rather than getting None back."""
-    payload = json.dumps({"type": "ack"}) + "\n" + json.dumps({"type": "done"})
-    stub = tmp_path / "alice"
-    _write_stub(stub, stdout=payload)
-    with pytest.raises(RuntimeError) as exc_info:
-        asyncio.run(context_probe_client.fetch_snapshot(alice_bin=str(stub)))
-    assert "no context_snapshot" in str(exc_info.value)
-
-
-def test_fetch_snapshot_times_out(tmp_path):
-    stub = tmp_path / "alice"
-    _write_stub(stub, stdout="", sleep_seconds=2.0)
-    with pytest.raises(TimeoutError):
-        asyncio.run(
             context_probe_client.fetch_snapshot(
-                alice_bin=str(stub), timeout=0.3
+                socket_path=str(tmp_path / "no-such.sock")
             )
         )
+
+
+def test_fetch_snapshot_raises_runtime_when_probe_unwired(tmp_path, loop_thread):
+    """The transport replies with ``error`` followed by ``done`` when
+    no probe is attached. fetch_snapshot turns that into RuntimeError."""
+    sock_path = tmp_path / "alice.sock"
+    transport = _run(loop_thread, _start_transport(sock_path, None))
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            asyncio.run(
+                context_probe_client.fetch_snapshot(socket_path=str(sock_path))
+            )
+    finally:
+        _run(loop_thread, transport.stop())
+    assert "probe unavailable" in str(exc_info.value)
+
+
+def test_fetch_snapshot_honors_env_var_socket(tmp_path, loop_thread, monkeypatch):
+    sock_path = tmp_path / "alice.sock"
+    transport = _run(loop_thread, _start_transport(sock_path, _make_probe()))
+    try:
+        monkeypatch.setenv("ALICE_CLI_SOCKET", str(sock_path))
+        snapshot = asyncio.run(context_probe_client.fetch_snapshot())
+    finally:
+        _run(loop_thread, transport.stop())
+    assert snapshot["session_id"] == "sess-abc"
 
 
 # ----------------------------------------------------------------------------
@@ -221,3 +243,7 @@ def test_context_page_renders(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "context · live snapshot" in response.text
     assert "/api/context" in response.text
+    # Block-grid renderer needs the page-data JSON tag with the model
+    # context window so it knows how many cells to allocate.
+    assert "context-page-data" in response.text
+    assert "context_window" in response.text

@@ -197,11 +197,13 @@ class SpeakingDaemon:
         # tracker below.
         # ``self._personae`` already resolved earlier — pass it into
         # the tool builder so descriptions reflect the agent's name.
-        self.mcp_servers, self.custom_tool_names = tools_module.build(
-            cfg,
-            address_book=self.address_book,
-            sender=self._send_message,
-            personae=self._personae,
+        self.mcp_servers, self.custom_tool_names, self.mcp_tool_defs = (
+            tools_module.build(
+                cfg,
+                address_book=self.address_book,
+                sender=self._send_message,
+                personae=self._personae,
+            )
         )
 
         # Compaction policy + state. Phase 6b of plan 01 replaced
@@ -442,6 +444,7 @@ class SpeakingDaemon:
             get_builtin_tools=lambda: list(BUILTIN_TOOLS),
             get_custom_tool_names=lambda: list(self.custom_tool_names),
             get_mcp_servers=lambda: dict(self.mcp_servers or {}),
+            get_mcp_tool_defs=lambda: dict(self.mcp_tool_defs or {}),
             get_session_id=lambda: self.turn_runner.session_id,
             get_pending_preamble=lambda: self.turn_runner._pending_preamble,
             get_current_turn_kind=lambda: self._current_turn_kind,
