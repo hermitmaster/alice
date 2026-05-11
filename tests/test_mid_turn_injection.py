@@ -16,8 +16,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
-import pytest
-
 from alice_speaking.daemon import SpeakingDaemon
 from alice_speaking.transports.base import ChannelRef
 
