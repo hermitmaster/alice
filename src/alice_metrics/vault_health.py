@@ -207,6 +207,18 @@ def _build_resolution_index(
         slugs_to_aliases[slug] = aliases
         for alias in aliases:
             alias_lower_to_slug.setdefault(alias.lower(), slug)
+    # Canvas files are valid wikilink targets too. They live alongside
+    # markdown notes (e.g. cortex-memory/canvases/*.canvas) and dailies
+    # routinely link to them as [[name.canvas]]. They have no frontmatter
+    # and aren't a source for outbound wikilink scanning, so they only
+    # need to land in by_slug — under both the bare stem and the
+    # extension-qualified form to match either link style.
+    if vault_dir.exists():
+        for canvas in vault_dir.rglob("*.canvas"):
+            if any(part.startswith(".") for part in canvas.relative_to(vault_dir).parts):
+                continue
+            by_slug.setdefault(canvas.stem, canvas)
+            by_slug.setdefault(f"{canvas.stem}.canvas", canvas)
     return by_slug, slugs_to_aliases, alias_lower_to_slug
 
 
