@@ -169,9 +169,13 @@ QWEN_API_BASE = "http://10.20.30.177:8033/v1"
 # goes off-script.
 QWEN_MAX_TOKENS = 32
 
-# Per-call wall-clock budget. The /memory page already takes ~1s on a
-# warm registry; a stuck endpoint shouldn't tack on 30s of dead air.
-QWEN_TIMEOUT_S = 15.0
+# Per-call wall-clock budget. Generous because (a) the LAN endpoint
+# loads weights on demand and a cold first-call from the viewer
+# container's bridge network has been observed at ~25s, and (b) all
+# pending lobes fan out concurrently via asyncio.gather, so the
+# page-load wait is bounded by the slowest single call rather than
+# the sum. Cached labels make this a one-time cost per lobe.
+QWEN_TIMEOUT_S = 90.0
 
 
 async def call_qwen_async(prompt: str) -> str:
