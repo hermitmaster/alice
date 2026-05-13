@@ -293,6 +293,66 @@ CLAUDE_BIN_FALLBACK = "claude"
 # trusted-author authorship to dedup.
 SPAWN_STARTED_PREFIX = "[SM] spawn-started"
 
+# ---------------------------------------------------------------------------
+# Issue #156 — per-issue thinking-agent spawn (SM v2 design pipeline)
+# ---------------------------------------------------------------------------
+#
+# The SM v2 pipeline replaces the v1 claude-cli code-worker on
+# ``(sm:selected, art:code)`` with a long-lived per-issue thinking-agent
+# that owns design + build (per
+# ``cortex-memory/research/2026-05-13-sm-v2-pipeline-revision.md`` §3 Q1).
+# Spawn machinery lives in a sibling pool to the v1 worker spawn dir so
+# the two lanes have independent concurrency caps (Q4): a multi-hour
+# design loop must not block one-shot research-writer dispatches and
+# vice versa.
+#
+# This issue (#156) only ships the spawn machinery — :func:`spawn_thinking_agent`,
+# the live-spawn / count helpers, and a placeholder entrypoint shim. The
+# wire-up into ``_process_selected`` is sub-issue 7 (the SPAWN_MAP
+# cutover). The real entrypoint script is sub-issue 3.
+
+# Separate spawn dir for the thinking lane. Same on-disk shape as
+# :data:`SPAWN_DIR` (per-spawn subdir with ``prompt.txt`` / ``pidfile`` /
+# ``stdout.log`` / ``stderr.log`` / ``session_id``).
+SM_THINKING_SPAWN_DIR = pathlib.Path("/state/worker/sm-thinking-spawns")
+
+# Concurrency cap for the thinking lane. Distinct from
+# :data:`MAX_CONCURRENT_SPAWNS` so a multi-hour design loop can't starve
+# one-shot research-writer dispatches. Configurable via env so operators
+# can tune without a redeploy.
+MAX_CONCURRENT_THINKING_SPAWNS = int(
+    os.environ.get("ALICE_MAX_CONCURRENT_THINKING_SPAWNS", "2")
+)
+
+# Audit-comment prefix for the thinking lane. Distinct from
+# :data:`SPAWN_STARTED_PREFIX` so the comments module can disambiguate
+# the two spawn events without re-implementing the parser cascade.
+THINKING_SPAWN_STARTED_PREFIX = "[SM] thinking-spawn-started"
+
+# Runtime label rendered into the audit comment. The shim itself is a
+# Python entrypoint, but the *agent* it boots talks to claude-agent-sdk
+# at Opus depth — that's the row in the persona × runtime matrix
+# (``[[2026-05-12-sm-v2-agent-type-system]]``).
+THINKING_RUNTIME_LABEL = "claude-agent-sdk:opus"
+
+# Per-issue phase the thinking-agent enters at spawn time. The dispatcher
+# only handles the design phase here; build-phase entry is via the
+# compaction restart (sub-issue 4) and reuses the same shim with
+# ``--mode=build``.
+THINKING_PHASE_PER_ISSUE_DESIGN = "per_issue_design"
+
+# Python interpreter used to launch the thinking shim. We prefer the
+# venv Python (which has claude-agent-sdk installed) and fall back to
+# the ambient ``python3`` so the dispatcher still runs cleanly in a
+# test or dev shell that doesn't have the venv mounted.
+PYTHON_BIN_PREFERRED = "/opt/alice-venv/bin/python"
+PYTHON_BIN_FALLBACK = "python3"
+
+# Dotted module path of the thinking-mode entrypoint shim. Placeholder
+# implementation lives at :mod:`alice_sm.thinking_shim`; sub-issue 3
+# replaces it with the real PhaseRunner dispatch.
+THINKING_SHIM_MODULE = "alice_sm.thinking_shim"
+
 # Issue #137 — worker session capture. We pre-mint a UUID per spawn and
 # pass it via ``--session-id`` so the worker writes its session JSONL to
 # a known file. The id is persisted in ``<spawn_dir>/session_id`` at
@@ -1543,6 +1603,42 @@ def find_live_spawn_dir_for_issue(
     return None
 
 
+def count_running_thinking_spawns(
+    spawn_dir: pathlib.Path = SM_THINKING_SPAWN_DIR,
+    *,
+    log: Callable[[str], None] | None = None,
+) -> int:
+    """Mirror of :func:`count_running_spawns` scoped to the thinking lane.
+
+    Issue #156. The thinking and worker spawn pools are independent
+    (separate concurrency caps, separate cleanup), so the dispatcher
+    can't reuse the worker pool's counter — a thinking-agent that's been
+    running for hours mustn't appear in the worker-pool count and
+    vice versa. The on-disk shape is identical so the implementation
+    is a thin wrapper.
+    """
+    return count_running_spawns(spawn_dir, log=log)
+
+
+def has_live_thinking_spawn_for_issue(
+    issue_number: int,
+    spawn_dir: pathlib.Path = SM_THINKING_SPAWN_DIR,
+    *,
+    log: Callable[[str], None] | None = None,
+) -> bool:
+    """Mirror of :func:`has_live_spawn_for_issue` scoped to the thinking lane.
+
+    Issue #156. A live thinking-agent spawn for ``issue_number`` →
+    True; stale matches are reaped into ``.finished/``. Crucially, this
+    helper consults only :data:`SM_THINKING_SPAWN_DIR` — a code-worker
+    spawn in :data:`SPAWN_DIR` on the same issue must NOT satisfy this
+    check (the two lanes have independent dedup semantics, even though
+    the SPAWN_MAP cutover in sub-issue 7 will normally route an issue
+    through exactly one of them).
+    """
+    return has_live_spawn_for_issue(issue_number, spawn_dir, log=log)
+
+
 # Issue #142 — canonical spawn dir name shape, ``spawn-<N>-<unix-ts>``.
 # Used by :func:`proactive_reap_dead_spawns` to recover the issue number
 # the dispatcher should look up when deciding whether a dead dir is safe
@@ -1890,6 +1986,226 @@ def spawn_agent(
     log(
         f"[sm-dispatcher] spawned {spawn_id} (pid={pid}) on #{number} "
         f"art={art_label} session_id={session_id}"
+    )
+    return spawn_id
+
+
+# ---------------------------------------------------------------------------
+# Issue #156 — per-issue thinking-agent spawn machinery
+# ---------------------------------------------------------------------------
+
+
+def resolve_python_bin(
+    *,
+    preferred: str = PYTHON_BIN_PREFERRED,
+    fallback: str = PYTHON_BIN_FALLBACK,
+) -> str:
+    """Return the Python interpreter path used to launch the thinking shim.
+
+    Mirrors :func:`resolve_claude_bin`: prefer the venv interpreter when
+    it exists, otherwise rely on ``$PATH`` so the dispatcher still runs
+    cleanly in a test / dev shell without the worker venv mounted.
+    """
+    if pathlib.Path(preferred).is_file():
+        return preferred
+    return fallback
+
+
+def compose_thinking_spawn_prompt(issue: dict[str, Any]) -> str:
+    """Render the prompt fed into ``<thinking_spawn_dir>/prompt.txt``.
+
+    The thinking-agent reads this verbatim at boot (sub-issue 3 wires
+    the real PhaseRunner dispatch). The structure mirrors
+    :func:`compose_spawn_prompt` so the operator-facing
+    ``cat prompt.txt`` view is familiar across both lanes — only the
+    role framing and the instruction trailer change.
+    """
+    number = issue.get("number")
+    title = issue.get("title") or "(no title)"
+    body = issue.get("body") or "(no body)"
+    art_label = "art:unknown"
+    for name in _label_names(issue):
+        if name.startswith("art:") and name in ART_LABEL_WHITELIST:
+            art_label = name
+            break
+    login = _author_login(issue) or "(unknown)"
+    source_label = f"source:{login}"
+
+    return (
+        f"You are a thinking-agent working on SM task #{number} in "
+        f"design mode ({THINKING_PHASE_PER_ISSUE_DESIGN}).\n"
+        f"\n"
+        f"Issue: #{number}\n"
+        f"Title: {title}\n"
+        f"Source: {source_label}\n"
+        f"Artifact type: {art_label}\n"
+        f"\n"
+        f"Issue body:\n"
+        f"{body}\n"
+        f"\n"
+        f"Your task: produce a design note that captures the structure "
+        f"of the change, prior art, alternatives considered, and a "
+        f"sub-issue breakdown if the work decomposes. Write the note "
+        f"into ~/alice-mind/cortex-memory/designs/<date>-issue"
+        f"{number}-<slug>.md and post `[SM] design-ready "
+        f"note=[[<wikilink>]] author=alice` on the issue when the "
+        f"draft is ready for speaking's review.\n"
+    )
+
+
+def render_thinking_spawn_started_comment(
+    number: int,
+    art_label: str,
+    spawn_id: str,
+    *,
+    phase: str = THINKING_PHASE_PER_ISSUE_DESIGN,
+    runtime: str = THINKING_RUNTIME_LABEL,
+    timestamp: str | None = None,
+) -> str:
+    """Produce the literal ``[SM] thinking-spawn-started ...`` audit comment.
+
+    The shape is distinct from :func:`render_spawn_started_comment` —
+    distinct prefix plus a ``phase=`` field — so the comments module can
+    disambiguate the two spawn events without re-implementing a
+    body-shape cascade.
+    """
+    ts = timestamp or _now_iso()
+    return (
+        f"{THINKING_SPAWN_STARTED_PREFIX} task=#{number} "
+        f"artifact={art_label} phase={phase} runtime={runtime} "
+        f"spawn_id={spawn_id} ts={ts}"
+    )
+
+
+def spawn_thinking_agent(
+    issue: dict[str, Any],
+    art_label: str,
+    repo: str,
+    *,
+    spawn_dir: pathlib.Path = SM_THINKING_SPAWN_DIR,
+    python_bin: str | None = None,
+    shim_module: str = THINKING_SHIM_MODULE,
+    phase: str = THINKING_PHASE_PER_ISSUE_DESIGN,
+    runtime: str = THINKING_RUNTIME_LABEL,
+    post_comment: PostCommentFn = gh_post_comment,
+    popen: Callable[..., Any] = subprocess.Popen,
+    now_iso: Callable[[], str] = _now_iso,
+    log: Callable[[str], None] = lambda s: print(s, file=sys.stderr),
+    clock: Callable[[], float] | None = None,
+    new_session_id: Callable[[], str] = lambda: str(uuid.uuid4()),
+) -> str | None:
+    """Spawn a per-issue thinking-agent for an SM issue.
+
+    Issue #156. Sibling of :func:`spawn_agent`. The shape is identical
+    on disk (``<spawn_dir>/<spawn_id>/`` with ``prompt.txt`` / ``pidfile`` /
+    ``stdout.log`` / ``stderr.log`` / ``session_id``) but the lane is
+    separate: distinct concurrency cap (:data:`MAX_CONCURRENT_THINKING_SPAWNS`),
+    distinct audit-comment prefix (:data:`THINKING_SPAWN_STARTED_PREFIX`),
+    distinct spawn dir (:data:`SM_THINKING_SPAWN_DIR`).
+
+    Steps:
+
+      1. Mint ``spawn_id = "spawn-<N>-<unix-ts>"`` and create
+         ``spawn_dir/<spawn_id>/``.
+      2. Compose the design-mode prompt and write ``prompt.txt``.
+      3. Pre-mint and persist the claude-agent-sdk session id
+         (``session_id``) before Popen so a crash mid-launch still
+         leaves the reaper a pointer.
+      4. Post the ``[SM] thinking-spawn-started ...`` audit comment
+         FIRST — without the dedup marker the next pass would re-spawn.
+      5. Launch the thinking shim detached via
+         ``python -m alice_sm.thinking_shim --spawn-dir <dir> --session-id <uuid>``
+         with stdout/stderr to log files, ``start_new_session=True`` so
+         the agent survives the dispatcher exiting.
+      6. Write PID to ``pidfile``.
+
+    Returns the ``spawn_id`` on success, or ``None`` if the issue number
+    isn't an integer (defensive — the dispatcher's main loop already
+    filters those out). Does NOT wait for the spawned subprocess.
+
+    The wire-up into ``_process_selected`` lands in sub-issue 7 (the
+    SPAWN_MAP cutover); this issue ships only the machinery. The real
+    entrypoint replaces :mod:`alice_sm.thinking_shim` in sub-issue 3.
+    """
+    if clock is None:
+        clock = time.time
+
+    number = issue.get("number")
+    if not isinstance(number, int):
+        log(
+            f"[sm-dispatcher] cannot spawn thinking-agent on "
+            f"non-integer issue number: {number!r}"
+        )
+        return None
+
+    if python_bin is None:
+        python_bin = resolve_python_bin()
+
+    spawn_id = f"spawn-{number}-{int(clock())}"
+    work_dir = spawn_dir / spawn_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt_text = compose_thinking_spawn_prompt(issue)
+    prompt_path = work_dir / "prompt.txt"
+    prompt_path.write_text(prompt_text)
+
+    # Pre-mint the SDK session id so the reaper can recover the worker's
+    # session JSONL even if the shim crashes before logging it. Persist
+    # BEFORE Popen for the same reason :func:`spawn_agent` does.
+    session_id = new_session_id()
+    (work_dir / SESSION_ID_FILENAME).write_text(session_id)
+
+    body = render_thinking_spawn_started_comment(
+        number,
+        art_label,
+        spawn_id,
+        phase=phase,
+        runtime=runtime,
+        timestamp=now_iso(),
+    )
+    try:
+        post_comment(repo, number, body)
+    except GHCommandError as exc:
+        log(
+            f"[sm-dispatcher] failed to post thinking-spawn-started on "
+            f"#{number}: {exc} — aborting spawn"
+        )
+        raise
+
+    stdout_path = work_dir / "stdout.log"
+    stderr_path = work_dir / "stderr.log"
+    pidfile_path = work_dir / "pidfile"
+
+    stdout_fh = open(stdout_path, "wb")
+    stderr_fh = open(stderr_path, "wb")
+    try:
+        proc = popen(
+            [
+                python_bin,
+                "-m",
+                shim_module,
+                "--spawn-dir",
+                str(work_dir),
+                "--session-id",
+                session_id,
+                "--mode",
+                "design",
+            ],
+            stdout=stdout_fh,
+            stderr=stderr_fh,
+            start_new_session=True,
+        )
+    finally:
+        stdout_fh.close()
+        stderr_fh.close()
+
+    pid = getattr(proc, "pid", None)
+    if pid is not None:
+        pidfile_path.write_text(str(pid))
+    log(
+        f"[sm-dispatcher] spawned thinking-agent {spawn_id} (pid={pid}) "
+        f"on #{number} art={art_label} phase={phase} "
+        f"session_id={session_id}"
     )
     return spawn_id
 
