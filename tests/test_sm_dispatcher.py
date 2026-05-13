@@ -5140,3 +5140,439 @@ def test_find_live_spawn_dir_skips_dead_dirs(
     # is well past pid_max on a typical default of 32768.
     (dead / "pidfile").write_text("999999")
     assert sm.find_live_spawn_dir_for_issue(99, spawn_root) is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #156 — spawn_thinking_agent (SM v2 per-issue design pipeline)
+# ---------------------------------------------------------------------------
+
+
+def test_thinking_spawn_writes_correctly_formed_spawn_dir(tmp_path) -> None:
+    """spawn_thinking_agent produces ``<spawn_dir>/spawn-<N>-<ts>/`` with
+    ``prompt.txt`` (design framing), ``pidfile``, ``session_id`` —
+    mirrors the worker-pool layout so the reaper / viewer don't need a
+    second on-disk shape to read."""
+    spawn_dir = tmp_path / "thinking-spawns"
+    spawn_dir.mkdir()
+    recorder = Recorder()
+    popens: list[FakePopen] = []
+
+    def popen(*args, **kwargs):
+        p = FakePopen(*args, **kwargs)
+        popens.append(p)
+        return p
+
+    issue = _make_issue(
+        700,
+        sm_labels=("sm:selected",),
+        art_labels=("art:code",),
+        title="design something",
+    )
+    issue["body"] = "this is the issue body"
+
+    spawn_id = sm.spawn_thinking_agent(
+        issue,
+        "art:code",
+        "jcronq/alice",
+        spawn_dir=spawn_dir,
+        python_bin="/opt/alice-venv/bin/python",
+        post_comment=recorder,
+        popen=popen,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert spawn_id is not None
+    assert spawn_id.startswith("spawn-700-")
+    subdirs = [
+        d for d in spawn_dir.iterdir() if d.is_dir() and d.name.startswith("spawn-")
+    ]
+    assert len(subdirs) == 1
+    sub = subdirs[0]
+    assert sub.name == spawn_id
+    # On-disk artifacts the dispatcher / reaper / viewer rely on.
+    assert (sub / "prompt.txt").is_file()
+    assert (sub / "pidfile").is_file()
+    assert (sub / "session_id").is_file()
+    pid_text = (sub / "pidfile").read_text()
+    assert pid_text == str(popens[0].pid)
+
+    prompt = (sub / "prompt.txt").read_text()
+    # Thinking-agent design framing — distinct from the code-worker
+    # prompt (no "Closes #N", no "--no-verify").
+    assert "thinking-agent" in prompt.lower()
+    assert "design mode" in prompt.lower()
+    assert "per_issue_design" in prompt
+    assert "Issue: #700" in prompt
+    assert "this is the issue body" in prompt
+    assert "design-ready" in prompt
+    # Not the code-worker trailer.
+    assert "Closes #700" not in prompt
+    assert "--no-verify" not in prompt
+
+
+def test_thinking_spawn_invokes_python_shim_with_args(tmp_path) -> None:
+    """Popen is called with the venv python + ``-m alice_sm.thinking_shim``
+    + spawn-dir + session-id + mode=design, detached via
+    ``start_new_session=True``."""
+    spawn_dir = tmp_path / "thinking-spawns"
+    spawn_dir.mkdir()
+    recorder = Recorder()
+    popens: list[FakePopen] = []
+
+    def popen(*args, **kwargs):
+        p = FakePopen(*args, **kwargs)
+        popens.append(p)
+        return p
+
+    issue = _make_issue(701, sm_labels=("sm:selected",), art_labels=("art:code",))
+
+    spawn_id = sm.spawn_thinking_agent(
+        issue,
+        "art:code",
+        "jcronq/alice",
+        spawn_dir=spawn_dir,
+        python_bin="/opt/alice-venv/bin/python",
+        post_comment=recorder,
+        popen=popen,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert spawn_id is not None
+    assert len(popens) == 1
+    cmd = popens[0].args
+    assert cmd[0] == "/opt/alice-venv/bin/python"
+    assert cmd[1:3] == ["-m", "alice_sm.thinking_shim"]
+    # --spawn-dir / --session-id / --mode passed through. The shim
+    # contract (sub-issue 3) consumes these.
+    assert "--spawn-dir" in cmd
+    assert "--session-id" in cmd
+    assert "--mode" in cmd
+    mode_idx = cmd.index("--mode")
+    assert cmd[mode_idx + 1] == "design"
+    sid_idx = cmd.index("--session-id")
+    session_id_arg = cmd[sid_idx + 1]
+    # session_id_arg matches what was persisted to the spawn dir.
+    sub = next(
+        d for d in spawn_dir.iterdir() if d.is_dir() and d.name.startswith("spawn-")
+    )
+    assert (sub / "session_id").read_text() == session_id_arg
+    # Detached so the dispatcher exiting doesn't take the agent with it.
+    assert popens[0].kwargs.get("start_new_session") is True
+
+
+def test_thinking_spawn_started_comment_shape(tmp_path) -> None:
+    """The audit comment uses the ``[SM] thinking-spawn-started`` prefix
+    and carries task / artifact / phase / runtime / spawn_id / ts —
+    distinct from the worker-pool ``[SM] spawn-started`` so the comments
+    module can disambiguate without a body-shape cascade."""
+    spawn_dir = tmp_path / "thinking-spawns"
+    spawn_dir.mkdir()
+    recorder = Recorder()
+
+    def popen(*args, **kwargs):
+        return FakePopen(*args, **kwargs)
+
+    issue = _make_issue(702, sm_labels=("sm:selected",), art_labels=("art:code",))
+    spawn_id = sm.spawn_thinking_agent(
+        issue,
+        "art:code",
+        "jcronq/alice",
+        spawn_dir=spawn_dir,
+        python_bin="/opt/alice-venv/bin/python",
+        post_comment=recorder,
+        popen=popen,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert spawn_id is not None
+    started = [b for _r, n, b in recorder.posted if n == 702]
+    assert len(started) == 1
+    body = started[0]
+    assert body.startswith("[SM] thinking-spawn-started")
+    # Distinct from the worker-pool prefix.
+    assert not body.startswith("[SM] spawn-started ")
+    assert "task=#702" in body
+    assert "artifact=art:code" in body
+    assert "phase=per_issue_design" in body
+    assert "runtime=claude-agent-sdk:opus" in body
+    assert f"spawn_id={spawn_id}" in body
+    assert f"ts={_frozen_now()}" in body
+
+
+def test_render_thinking_spawn_started_comment_exact_shape() -> None:
+    """Unit test on the renderer so the wire format is locked in."""
+    out = sm.render_thinking_spawn_started_comment(
+        42, "art:code", "spawn-42-1000", timestamp="2026-05-13T00:00:00+00:00"
+    )
+    assert out == (
+        "[SM] thinking-spawn-started task=#42 artifact=art:code "
+        "phase=per_issue_design runtime=claude-agent-sdk:opus "
+        "spawn_id=spawn-42-1000 ts=2026-05-13T00:00:00+00:00"
+    )
+
+
+def test_has_live_thinking_spawn_for_issue_matches_live_reaps_dead(tmp_path) -> None:
+    """``has_live_thinking_spawn_for_issue`` returns True for a dir with a
+    live PID, False for dead, and reaps the dead dir into
+    ``.finished/``. Consults only the thinking lane dir."""
+    import os as _os
+
+    spawn_dir = tmp_path / "thinking-spawns"
+    spawn_dir.mkdir()
+
+    # #100: live (this process).
+    live = spawn_dir / "spawn-100-1"
+    live.mkdir()
+    (live / "pidfile").write_text(str(_os.getpid()))
+
+    # #200: dead (impossible PID).
+    dead = spawn_dir / "spawn-200-1"
+    dead.mkdir()
+    (dead / "pidfile").write_text("99999999")
+
+    assert sm.has_live_thinking_spawn_for_issue(100, spawn_dir) is True
+    assert live.exists()  # live dir preserved
+
+    assert sm.has_live_thinking_spawn_for_issue(200, spawn_dir) is False
+    # Dead dir got reaped to .finished/.
+    assert not dead.exists()
+    assert (spawn_dir / ".finished" / "spawn-200-1").exists()
+
+    # No spawn at all for #300 → False, no side effects.
+    assert sm.has_live_thinking_spawn_for_issue(300, spawn_dir) is False
+
+
+def test_has_live_thinking_spawn_does_not_see_worker_pool_spawn(tmp_path) -> None:
+    """Issue #156: the thinking lane and worker lane are independent. A
+    live worker-pool spawn for #N must NOT make
+    ``has_live_thinking_spawn_for_issue(N)`` return True."""
+    import os as _os
+
+    worker_dir = tmp_path / "worker-spawns"
+    worker_dir.mkdir()
+    thinking_dir = tmp_path / "thinking-spawns"
+    thinking_dir.mkdir()
+
+    live_worker = worker_dir / "spawn-500-1"
+    live_worker.mkdir()
+    (live_worker / "pidfile").write_text(str(_os.getpid()))
+
+    assert sm.has_live_spawn_for_issue(500, worker_dir) is True
+    assert sm.has_live_thinking_spawn_for_issue(500, thinking_dir) is False
+
+
+def test_count_running_thinking_spawns_independent_pool(tmp_path) -> None:
+    """count_running_thinking_spawns reflects only the thinking-lane dir;
+    used by the future ``_process_selected`` wiring to gate against
+    :data:`MAX_CONCURRENT_THINKING_SPAWNS` without conflating the
+    worker-pool count."""
+    import os as _os
+
+    thinking_dir = tmp_path / "thinking-spawns"
+    thinking_dir.mkdir()
+    worker_dir = tmp_path / "worker-spawns"
+    worker_dir.mkdir()
+
+    # Two live thinking-agent spawns.
+    for n, ts in ((101, "1"), (102, "1")):
+        d = thinking_dir / f"spawn-{n}-{ts}"
+        d.mkdir()
+        (d / "pidfile").write_text(str(_os.getpid()))
+    # Worker spawn doesn't count toward the thinking total.
+    wd = worker_dir / "spawn-200-1"
+    wd.mkdir()
+    (wd / "pidfile").write_text(str(_os.getpid()))
+
+    assert sm.count_running_thinking_spawns(thinking_dir) == 2
+    assert sm.count_running_spawns(worker_dir) == 1
+
+
+def test_thinking_spawn_concurrency_cap_constant_and_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``MAX_CONCURRENT_THINKING_SPAWNS`` defaults to 2 and is overridden
+    by ``ALICE_MAX_CONCURRENT_THINKING_SPAWNS``. The cap is enforced by
+    the caller (``_process_selected`` after sub-issue 7 wires it up) —
+    this test locks in the constant's contract so the wiring has a
+    stable value to gate against."""
+    import importlib
+
+    assert sm.MAX_CONCURRENT_THINKING_SPAWNS == 2
+
+    monkeypatch.setenv("ALICE_MAX_CONCURRENT_THINKING_SPAWNS", "5")
+    reloaded = importlib.reload(sm)
+    try:
+        assert reloaded.MAX_CONCURRENT_THINKING_SPAWNS == 5
+    finally:
+        # Restore the module-level constant for the rest of the suite.
+        monkeypatch.delenv("ALICE_MAX_CONCURRENT_THINKING_SPAWNS", raising=False)
+        importlib.reload(sm)
+
+
+def test_thinking_spawn_dir_is_separate_from_worker_default() -> None:
+    """The default thinking-lane spawn dir is distinct from
+    :data:`SPAWN_DIR` so the two pools don't share on-disk state."""
+    assert sm.SM_THINKING_SPAWN_DIR != sm.SPAWN_DIR
+    assert sm.SM_THINKING_SPAWN_DIR == pathlib.Path(
+        "/state/worker/sm-thinking-spawns"
+    )
+
+
+def test_thinking_spawn_started_prefix_distinct_from_worker_prefix() -> None:
+    """The audit prefixes are distinct so the comments dedup module
+    (centralized in alice_sm.comments per sub-issue 5) can disambiguate."""
+    assert sm.THINKING_SPAWN_STARTED_PREFIX == "[SM] thinking-spawn-started"
+    assert sm.SPAWN_STARTED_PREFIX == "[SM] spawn-started"
+    assert sm.THINKING_SPAWN_STARTED_PREFIX != sm.SPAWN_STARTED_PREFIX
+    # And neither is a prefix of the other (prevents accidental match
+    # against the wrong cascade branch).
+    assert not sm.THINKING_SPAWN_STARTED_PREFIX.startswith(sm.SPAWN_STARTED_PREFIX)
+    assert not sm.SPAWN_STARTED_PREFIX.startswith(sm.THINKING_SPAWN_STARTED_PREFIX)
+
+
+def test_thinking_spawn_aborts_on_failed_comment_post(tmp_path) -> None:
+    """If the audit-comment POST fails (auth / rate limit / transport),
+    the spawn is aborted: no Popen, exception re-raised. Mirrors the
+    worker-pool semantics — without the dedup marker the next pass
+    would re-spawn."""
+    spawn_dir = tmp_path / "thinking-spawns"
+    spawn_dir.mkdir()
+
+    def failing_post(_r, _n, _b):
+        raise sm.GHCommandError(returncode=1, stderr="rate limit", args=[])
+
+    popens: list[FakePopen] = []
+
+    def popen(*args, **kwargs):
+        p = FakePopen(*args, **kwargs)
+        popens.append(p)
+        return p
+
+    issue = _make_issue(703, sm_labels=("sm:selected",), art_labels=("art:code",))
+
+    with pytest.raises(sm.GHCommandError):
+        sm.spawn_thinking_agent(
+            issue,
+            "art:code",
+            "jcronq/alice",
+            spawn_dir=spawn_dir,
+            python_bin="/opt/alice-venv/bin/python",
+            post_comment=failing_post,
+            popen=popen,
+            now_iso=_frozen_now,
+            log=lambda _m: None,
+        )
+
+    assert popens == []
+    # Spawn dir exists but pidfile does NOT — reaper will sweep it up on
+    # the next pass (treated as a dead spawn).
+    sub = next(
+        d for d in spawn_dir.iterdir() if d.is_dir() and d.name.startswith("spawn-")
+    )
+    assert (sub / "prompt.txt").is_file()
+    assert not (sub / "pidfile").exists()
+
+
+def test_thinking_spawn_non_integer_issue_number_returns_none(tmp_path) -> None:
+    """Defensive: a malformed payload (issue number is None / str) must
+    not crash; spawn_thinking_agent returns None and posts nothing."""
+    spawn_dir = tmp_path / "thinking-spawns"
+    spawn_dir.mkdir()
+    recorder = Recorder()
+    popens: list[FakePopen] = []
+
+    def popen(*args, **kwargs):
+        p = FakePopen(*args, **kwargs)
+        popens.append(p)
+        return p
+
+    issue = {
+        "number": "not-an-int",
+        "title": "broken",
+        "labels": [{"name": "sm:selected"}, {"name": "art:code"}],
+        "author": {"login": "jcronq"},
+    }
+    result = sm.spawn_thinking_agent(
+        issue,
+        "art:code",
+        "jcronq/alice",
+        spawn_dir=spawn_dir,
+        python_bin="/opt/alice-venv/bin/python",
+        post_comment=recorder,
+        popen=popen,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+    assert result is None
+    assert recorder.posted == []
+    assert popens == []
+
+
+def test_resolve_python_bin_prefers_venv_then_falls_back(tmp_path) -> None:
+    """resolve_python_bin returns the venv interpreter when present,
+    else falls back to ``python3`` (PATH-resolved). Mirrors
+    :func:`resolve_claude_bin`."""
+    fake_venv = tmp_path / "venv-python"
+    fake_venv.write_text("#!/bin/sh\nexit 0\n")
+    fake_venv.chmod(0o755)
+    assert (
+        sm.resolve_python_bin(preferred=str(fake_venv), fallback="python3")
+        == str(fake_venv)
+    )
+    missing = tmp_path / "does-not-exist"
+    assert (
+        sm.resolve_python_bin(preferred=str(missing), fallback="python3") == "python3"
+    )
+
+
+def test_thinking_shim_module_is_importable_and_exits_cleanly() -> None:
+    """The placeholder shim is a real Python module — the dispatcher
+    path can be exercised without the thinking runtime. Sub-issue 3
+    replaces this with the real PhaseRunner dispatch."""
+    import importlib
+
+    shim = importlib.import_module("alice_sm.thinking_shim")
+    assert hasattr(shim, "main")
+
+
+def test_thinking_shim_main_exits_zero_with_valid_args(tmp_path) -> None:
+    """Calling thinking_shim.main with a valid --spawn-dir / --session-id
+    / --mode returns 0 (placeholder behavior — sub-issue 3 swaps in the
+    real entrypoint)."""
+    from alice_sm import thinking_shim
+
+    spawn_dir = tmp_path / "spawn-dir"
+    spawn_dir.mkdir()
+    (spawn_dir / "prompt.txt").write_text("placeholder prompt")
+    rc = thinking_shim.main(
+        [
+            "--spawn-dir",
+            str(spawn_dir),
+            "--session-id",
+            "11111111-2222-3333-4444-555555555555",
+            "--mode",
+            "design",
+        ]
+    )
+    assert rc == 0
+
+
+def test_thinking_shim_main_exits_nonzero_when_prompt_missing(tmp_path) -> None:
+    """A spawn dir without ``prompt.txt`` is malformed → the shim exits
+    non-zero so the reaper sees a clean failure."""
+    from alice_sm import thinking_shim
+
+    spawn_dir = tmp_path / "spawn-dir"
+    spawn_dir.mkdir()
+    rc = thinking_shim.main(
+        [
+            "--spawn-dir",
+            str(spawn_dir),
+            "--session-id",
+            "11111111-2222-3333-4444-555555555555",
+        ]
+    )
+    assert rc == 1
