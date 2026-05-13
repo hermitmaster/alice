@@ -300,24 +300,68 @@ def test_study_rejected_happy(log: LogCapture) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_route_to_study_happy(log: LogCapture) -> None:
+def test_route_to_study_happy_bare(log: LogCapture) -> None:
+    """Bare form — issue keeps its current art:* label across the transition."""
     assert (
         cm.parse_route_to_study("[SM] route-to-study", "jcronq", log=log)
-        == cm.RouteToStudy()
+        == cm.RouteToStudy(art_label=None)
     )
 
 
-def test_return_to_study_happy(log: LogCapture) -> None:
-    assert (
-        cm.parse_return_to_study("[SM] return-to-study", "jcronq", log=log)
-        == cm.ReturnToStudy()
-    )
+def test_route_to_study_with_art_swap(log: LogCapture) -> None:
+    body = "[SM] route-to-study art=art:research_note"
+    out = cm.parse_route_to_study(body, "jcronq", log=log)
+    assert out == cm.RouteToStudy(art_label="art:research_note")
+
+
+def test_route_to_study_art_must_be_whitelisted(log: LogCapture) -> None:
+    body = "[SM] route-to-study art=art:imaginary"
+    assert cm.parse_route_to_study(body, "jcronq", log=log) is None
+    assert "not in whitelist" in log.joined()
 
 
 def test_route_to_study_trailing_junk_rejected(log: LogCapture) -> None:
     body = "[SM] route-to-study oh-hi"
     assert cm.parse_route_to_study(body, "jcronq", log=log) is None
-    assert "trailing content" in log.joined()
+    assert "unexpected trailing content" in log.joined()
+
+
+def test_route_to_study_unknown_field_rejected(log: LogCapture) -> None:
+    body = "[SM] route-to-study reason=foo"
+    assert cm.parse_route_to_study(body, "jcronq", log=log) is None
+    assert "unexpected trailing content" in log.joined()
+
+
+def test_route_to_study_untrusted(log: LogCapture) -> None:
+    assert (
+        cm.parse_route_to_study("[SM] route-to-study", "drive-by", log=log) is None
+    )
+    assert "untrusted" in log.joined()
+
+
+def test_return_to_study_happy(log: LogCapture) -> None:
+    body = '[SM] return-to-study reason="need design clarification"'
+    out = cm.parse_return_to_study(body, "jcronq", log=log)
+    assert out == cm.ReturnToStudy(reason="need design clarification")
+
+
+def test_return_to_study_bareword_reason(log: LogCapture) -> None:
+    body = "[SM] return-to-study reason=stub"
+    out = cm.parse_return_to_study(body, "jcronq", log=log)
+    assert out == cm.ReturnToStudy(reason="stub")
+
+
+def test_return_to_study_missing_reason(log: LogCapture) -> None:
+    assert (
+        cm.parse_return_to_study("[SM] return-to-study", "jcronq", log=log) is None
+    )
+    assert "missing reason" in log.joined()
+
+
+def test_return_to_study_untrusted(log: LogCapture) -> None:
+    body = '[SM] return-to-study reason="x"'
+    assert cm.parse_return_to_study(body, "drive-by", log=log) is None
+    assert "untrusted" in log.joined()
 
 
 # ---------------------------------------------------------------------------

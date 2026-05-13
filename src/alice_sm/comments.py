@@ -167,12 +167,28 @@ class StudyRejected:
 
 @dataclass(frozen=True)
 class RouteToStudy:
-    """``[SM] route-to-study`` — sm:draft → sm:needs_study entry transition."""
+    """``[SM] route-to-study art=<art-label>?`` — sm:draft → sm:needs_study.
+
+    The ``art`` field is optional. When present, the dispatcher swaps
+    the issue's ``art:*`` label on the transition; the parsed value is
+    already validated against
+    :data:`alice_sm.dispatcher.ART_LABEL_WHITELIST`. When absent, the
+    issue keeps its existing ``art:*`` label.
+    """
+
+    art_label: str | None = None
 
 
 @dataclass(frozen=True)
 class ReturnToStudy:
-    """``[SM] return-to-study`` — sm:selected → sm:needs_study entry transition."""
+    """``[SM] return-to-study reason=<text>`` — sm:selected → sm:needs_study.
+
+    Worker-emitted "I need thinking input before I can build" signal.
+    ``reason`` is required so the audit trail records *why* the issue
+    bounced back to the study lane.
+    """
+
+    reason: str
 
 
 # Union over every parsed result type. Handlers that consume
@@ -552,18 +568,38 @@ def parse_route_to_study(
     comment_author: str | None,
     *,
     trusted_authors: frozenset[str] = TRUSTED_AUTHORS,
+    art_whitelist: frozenset[str] = ART_LABEL_WHITELIST,
     log: Callable[[str], None] = _default_log,
 ) -> RouteToStudy | None:
-    """``[SM] route-to-study`` — sm:draft → sm:needs_study."""
+    """``[SM] route-to-study art=<art-label>?`` — sm:draft → sm:needs_study.
+
+    The bare form (no fields) is the common case: the issue keeps its
+    current ``art:*`` label across the transition. ``art=<label>`` is
+    optional and must be whitelisted when present; the dispatcher uses
+    it to swap the issue's art label as part of the transition.
+    """
     tail = _strip_verb(body, "route-to-study")
     if tail is None:
         return None
-    if tail:
-        log(f"[sm-comments] route-to-study has unexpected trailing content: {tail!r}")
-        return None
     if not _check_trust(comment_author, trusted_authors, "route-to-study", log):
         return None
-    return RouteToStudy()
+    if not tail:
+        return RouteToStudy(art_label=None)
+    kv = _extract_kv(tail)
+    unexpected = set(kv) - {"art"}
+    if unexpected or "art" not in kv:
+        log(
+            f"[sm-comments] route-to-study has unexpected trailing content: {tail!r}"
+        )
+        return None
+    art_label = kv["art"]
+    if art_label not in art_whitelist:
+        log(
+            f"[sm-comments] route-to-study art label {art_label!r} not in "
+            f"whitelist {sorted(art_whitelist)}"
+        )
+        return None
+    return RouteToStudy(art_label=art_label)
 
 
 def parse_return_to_study(
@@ -573,16 +609,23 @@ def parse_return_to_study(
     trusted_authors: frozenset[str] = TRUSTED_AUTHORS,
     log: Callable[[str], None] = _default_log,
 ) -> ReturnToStudy | None:
-    """``[SM] return-to-study`` — sm:selected → sm:needs_study."""
+    """``[SM] return-to-study reason=<text>`` — sm:selected → sm:needs_study.
+
+    ``reason`` is required: the worker-emitted "I need thinking input"
+    signal must record why the issue couldn't be advanced from
+    ``sm:selected``, so the audit trail explains the reversal.
+    """
     tail = _strip_verb(body, "return-to-study")
     if tail is None:
         return None
-    if tail:
-        log(f"[sm-comments] return-to-study has unexpected trailing content: {tail!r}")
-        return None
     if not _check_trust(comment_author, trusted_authors, "return-to-study", log):
         return None
-    return ReturnToStudy()
+    kv = _extract_kv(tail)
+    reason = kv.get("reason")
+    if not reason:
+        log("[sm-comments] return-to-study missing reason field")
+        return None
+    return ReturnToStudy(reason=reason)
 
 
 # ---------------------------------------------------------------------------

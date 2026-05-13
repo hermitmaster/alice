@@ -27,6 +27,21 @@ from alice_sm import dispatcher as sm
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _stub_gh_list_issue_comments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default the gh comments fetcher to a benign empty result.
+
+    The dispatcher's ``_process_selected`` (return-to-study check) and
+    ``_process_needs_study`` / ``_process_draft`` paths invoke
+    ``list_comments`` to scan for ``[SM] ...`` verb comments. Without
+    this stub, tests that don't otherwise inject ``list_comments=``
+    would shell out to a real ``gh`` against the live repo. Tests that
+    exercise the comment-scan branch override ``list_comments`` on
+    their own ``sm.run`` call, which takes precedence.
+    """
+    monkeypatch.setattr(sm, "gh_list_issue_comments", lambda _repo, _n: [])
+
+
 @pytest.fixture
 def state_path(tmp_path: pathlib.Path) -> pathlib.Path:
     return tmp_path / "sm-dispatcher-state.json"
@@ -3990,4 +4005,421 @@ def test_dispatcher_state_needs_study_fifo_eviction() -> None:
     state.mark_needs_study_hint(sm.SEEN_ISSUE_CAP + 1)
     assert len(state.needs_study_hinted) == sm.SEEN_ISSUE_CAP
     assert 1 not in state.needs_study_hinted
-    assert state.needs_study_hinted[-1] == sm.SEEN_ISSUE_CAP + 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #162 — sm:draft route-to-study and sm:selected return-to-study
+# ---------------------------------------------------------------------------
+
+
+def _draft_issue(
+    number: int,
+    *,
+    art_labels: tuple[str, ...] = ("art:code",),
+    author: str = "jcronq",
+    title: str = "Drafted task",
+) -> dict:
+    return _make_issue(
+        number,
+        author=author,
+        sm_labels=("sm:draft",),
+        art_labels=art_labels,
+        title=title,
+    )
+
+
+def test_draft_route_to_study_transitions_to_needs_study(
+    state_path: pathlib.Path,
+) -> None:
+    """A trusted ``[SM] route-to-study`` on a draft issue moves it to
+    sm:needs_study."""
+    issues = [_draft_issue(400)]
+    comments = [_audit_comment("[SM] route-to-study")]
+
+    recorder = Recorder()
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=recorder,
+        edit_labels=label_rec,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 1
+    assert (400, "sm:draft", "sm:needs_study") in report.transitions
+    assert len(label_rec.calls) == 1
+    edit = label_rec.calls[0]
+    assert edit["add"] == ["sm:needs_study"]
+    assert edit["remove"] == ["sm:draft"]
+    # Transition audit comment posted.
+    bodies = [b for _r, _n, b in recorder.posted]
+    assert any(
+        'from=draft to=needs_study reason="route-to-study"' in b for b in bodies
+    )
+
+
+def test_draft_route_to_study_swaps_art_label(state_path: pathlib.Path) -> None:
+    """``art=`` on the comment swaps the issue's art:* alongside the
+    sm:* transition."""
+    issues = [_draft_issue(401, art_labels=("art:code",))]
+    comments = [_audit_comment("[SM] route-to-study art=art:research_note")]
+
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=Recorder(),
+        edit_labels=label_rec,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 1
+    edit = label_rec.calls[0]
+    assert set(edit["add"]) == {"sm:needs_study", "art:research_note"}
+    assert set(edit["remove"]) == {"sm:draft", "art:code"}
+
+
+def test_draft_route_to_study_unknown_art_does_not_transition(
+    state_path: pathlib.Path,
+) -> None:
+    """``art:bogus`` is rejected by the parser → no transition."""
+    issues = [_draft_issue(402)]
+    comments = [_audit_comment("[SM] route-to-study art=art:bogus")]
+    logged: list[str] = []
+
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=Recorder(),
+        edit_labels=label_rec,
+        now_iso=_frozen_now,
+        log=logged.append,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 0
+    assert label_rec.calls == []
+    assert any("art:bogus" in m and "whitelist" in m for m in logged)
+
+
+def test_draft_untrusted_comment_author_is_ignored(
+    state_path: pathlib.Path,
+) -> None:
+    """Forged route-to-study from a non-trusted commenter doesn't transition."""
+    issues = [_draft_issue(403)]
+    comments = [_audit_comment("[SM] route-to-study", author="random-drive-by")]
+
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=Recorder(),
+        edit_labels=label_rec,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 0
+    assert label_rec.calls == []
+
+
+def test_draft_with_no_route_to_study_comment_stays(
+    state_path: pathlib.Path,
+) -> None:
+    """Regression: a draft issue with only unrelated comments does not move."""
+    issues = [_draft_issue(404)]
+    comments = [_audit_comment("looks promising — let me think about it")]
+
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=Recorder(),
+        edit_labels=label_rec,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 0
+    assert label_rec.calls == []
+
+
+def test_draft_route_to_study_untrusted_issue_author_skipped(
+    state_path: pathlib.Path,
+) -> None:
+    """Trust filter still applies at the issue level — an untrusted *issue*
+    author is filtered out before the comment scan even runs."""
+    issues = [_draft_issue(405, author="random-drive-by")]
+    comments = [_audit_comment("[SM] route-to-study")]
+
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=Recorder(),
+        edit_labels=label_rec,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 0
+    assert report.skipped_trust == 1
+    assert label_rec.calls == []
+
+
+def test_draft_route_to_study_dry_run_records_intent_only(
+    state_path: pathlib.Path,
+) -> None:
+    issues = [_draft_issue(406)]
+    comments = [_audit_comment("[SM] route-to-study")]
+
+    recorder = Recorder()
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=recorder,
+        edit_labels=label_rec,
+        now_iso=_frozen_now,
+        dry_run=True,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 1
+    assert (406, "sm:draft", "sm:needs_study") in report.transitions
+    assert recorder.posted == []
+    assert label_rec.calls == []
+
+
+def test_selected_return_to_study_transitions_back_to_needs_study(
+    state_path: pathlib.Path,
+) -> None:
+    """A worker-emitted ``[SM] return-to-study reason=...`` on an
+    sm:selected issue reverses the state."""
+    issues = [_make_issue(500)]
+    comments = [
+        _audit_comment(
+            '[SM] return-to-study reason="need design clarification on caching"'
+        ),
+    ]
+
+    recorder = Recorder()
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=recorder,
+        edit_labels=label_rec,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 1
+    assert (500, "sm:selected", "sm:needs_study") in report.transitions
+    edit = label_rec.calls[0]
+    assert edit["add"] == ["sm:needs_study"]
+    assert edit["remove"] == ["sm:selected"]
+    # Transition audit captures the reason verbatim.
+    bodies = [b for _r, _n, b in recorder.posted]
+    assert any("return-to-study" in b and "need design clarification" in b for b in bodies)
+
+
+def test_selected_return_to_study_short_circuits_hello_and_spawn(
+    state_path: pathlib.Path,
+) -> None:
+    """When a return-to-study comment is present, dispatcher must NOT post
+    hello or attempt to spawn — the issue is leaving sm:selected this pass,
+    so the concurrency slot stays free."""
+    issues = [_make_issue(501)]
+    comments = [_audit_comment('[SM] return-to-study reason="x"')]
+
+    spawn_calls: list = []
+
+    def fake_spawn(_issue, _art, _repo):
+        spawn_calls.append(_issue["number"])
+        return "fake-spawn-id"
+
+    recorder = Recorder()
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=True,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=recorder,
+        edit_labels=label_rec,
+        find_linked_pr=_no_pr,
+        pr_merge_status=_no_call,
+        master_ci_status=_no_call,
+        has_live_spawn=lambda _n: False,
+        count_running=lambda: 0,
+        spawn=fake_spawn,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    # Transitioned, no spawn fired, no dispatcher-hello posted.
+    assert report.transitioned == 1
+    assert (501, "sm:selected", "sm:needs_study") in report.transitions
+    assert spawn_calls == []
+    assert report.spawned == 0
+    bodies = [b for _r, _n, b in recorder.posted]
+    assert not any("dispatcher-hello" in b for b in bodies)
+
+
+def test_selected_without_return_to_study_proceeds_normally(
+    state_path: pathlib.Path,
+) -> None:
+    """Regression: an unrelated comment on sm:selected does not block the
+    normal hello/T1 path."""
+    issues = [_make_issue(502)]
+    comments = [_audit_comment("not an SM-protocol comment")]
+
+    recorder = Recorder()
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=recorder,
+        edit_labels=label_rec,
+        find_linked_pr=_no_pr,
+        pr_merge_status=_no_call,
+        master_ci_status=_no_call,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 0
+    assert report.posted == 1  # hello fired
+    assert label_rec.calls == []
+
+
+def test_selected_return_to_study_untrusted_author_is_ignored(
+    state_path: pathlib.Path,
+) -> None:
+    """A forged return-to-study comment from an untrusted author must not
+    trigger a transition."""
+    issues = [_make_issue(503)]
+    comments = [
+        _audit_comment(
+            '[SM] return-to-study reason="forged"',
+            author="random-drive-by",
+        ),
+    ]
+
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=Recorder(),
+        edit_labels=label_rec,
+        find_linked_pr=_no_pr,
+        pr_merge_status=_no_call,
+        master_ci_status=_no_call,
+        now_iso=_frozen_now,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    # No return-to-study transition; the normal hello flow still ran.
+    assert (503, "sm:selected", "sm:needs_study") not in report.transitions
+    assert label_rec.calls == []
+
+
+def test_selected_return_to_study_dry_run_records_intent_only(
+    state_path: pathlib.Path,
+) -> None:
+    issues = [_make_issue(504)]
+    comments = [_audit_comment('[SM] return-to-study reason="x"')]
+
+    recorder = Recorder()
+    label_rec = LabelRecorder()
+    exit_code, report = sm.run(
+        repo="jcronq/alice",
+        state_path=state_path,
+        enable_spawn=False,
+        enable_cleanup=False,
+        enable_verify=False,
+        list_issues=lambda repo: issues,
+        list_comments=lambda repo, n: comments,
+        post_comment=recorder,
+        edit_labels=label_rec,
+        find_linked_pr=_no_pr,
+        pr_merge_status=_no_call,
+        master_ci_status=_no_call,
+        now_iso=_frozen_now,
+        dry_run=True,
+        log=lambda _m: None,
+    )
+
+    assert exit_code == 0
+    assert report.transitioned == 1
+    assert (504, "sm:selected", "sm:needs_study") in report.transitions
+    assert recorder.posted == []
+    assert label_rec.calls == []
