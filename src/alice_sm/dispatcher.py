@@ -117,6 +117,7 @@ ART_LABEL_WHITELIST: frozenset[str] = frozenset(
 # v0 only acted on ``sm:selected``. Phase 1.5 also acts on
 # ``sm:reviewing``. Other ``sm:*`` states will be handled in later
 # phases (building → spawn agent, validating → quality-gate, etc.).
+DRAFT_SM_LABEL = "sm:draft"
 ACTIVE_SM_LABEL = "sm:selected"
 REVIEWING_SM_LABEL = "sm:reviewing"
 BUILDING_SM_LABEL = "sm:building"
@@ -2206,6 +2207,8 @@ def _process_selected(
     post_comment: PostCommentFn,
     edit_labels: EditLabelsFn,
     find_linked_pr: FindLinkedPRFn,
+    list_comments: ListCommentsFn,
+    trusted_authors: frozenset[str],
     has_live_spawn: Callable[[int], bool] | None,
     count_running: Callable[[], int] | None,
     spawn: Callable[[dict[str, Any], str, str], str | None] | None,
@@ -2214,19 +2217,87 @@ def _process_selected(
     log: Callable[[str], None],
     now_iso: Callable[[], str],
 ) -> None:
-    """Hello + T1 (selected → reviewing) + Phase 2 spawn for one sm:selected
-    issue.
+    """Return-to-study check + Hello + T1 (selected → reviewing) + Phase 2
+    spawn for one sm:selected issue.
 
-    Order matters: trust filter → hello (idempotent) → T1 if linked PR
-    exists (terminating, since work is already in flight) → otherwise
-    Phase 2 spawn (gated by concurrency cap + dedup on a live spawn
-    dir for the issue — see :func:`has_live_spawn_for_issue`).
+    Order matters: trust filter → return-to-study scan (terminating: an
+    explicit ``[SM] return-to-study`` from the worker reverses the
+    state before any new work fires) → hello (idempotent) → T1 if
+    linked PR exists (terminating, since work is already in flight) →
+    otherwise Phase 2 spawn (gated by concurrency cap + dedup on a
+    live spawn dir for the issue — see
+    :func:`has_live_spawn_for_issue`).
     """
     number = issue["number"]
-    decision = evaluate_trust(issue)
+    decision = evaluate_trust(issue, trusted_authors=trusted_authors)
     if not decision.accepted:
         log(f"[sm-dispatcher] skipping #{number}: {decision.reason}")
         report.skipped_trust += 1
+        return
+
+    # ----- return-to-study check -----
+    # A worker that realises it can't advance from sm:selected without
+    # further thinking input emits ``[SM] return-to-study reason=...``;
+    # the dispatcher reverses the state on the next pass. This must
+    # short-circuit the hello/T1/spawn flow — once the issue is going
+    # back to needs_study there's no point posting a hello or queuing a
+    # new spawn.
+    try:
+        sel_comments = list_comments(repo, number)
+    except GHCommandError as exc:
+        log(
+            f"[sm-dispatcher] selected #{number}: "
+            f"failed to list comments: {exc}"
+        )
+        if exc.looks_like_auth_failure or exc.looks_like_rate_limit:
+            raise
+        sel_comments = []
+    from alice_sm.comments import ReturnToStudy
+    parsed_return = _find_parsed_comment_of_type(
+        sel_comments,
+        ReturnToStudy,
+        trusted_authors=trusted_authors,
+        log=log,
+    )
+    if parsed_return is not None:
+        reason = f'return-to-study reason="{parsed_return.reason}"'
+        transition_body = render_transition_comment(
+            ACTIVE_SM_LABEL, NEEDS_STUDY_SM_LABEL, reason
+        )
+        if dry_run:
+            log(
+                f"[sm-dispatcher] DRY-RUN would transition #{number}: "
+                f"selected → needs_study ({reason})"
+            )
+            report.transitioned += 1
+            report.transitions.append(
+                (number, ACTIVE_SM_LABEL, NEEDS_STUDY_SM_LABEL)
+            )
+            return
+        try:
+            edit_labels(
+                repo,
+                number,
+                add=[NEEDS_STUDY_SM_LABEL],
+                remove=[ACTIVE_SM_LABEL],
+            )
+            post_comment(repo, number, transition_body)
+        except GHCommandError as exc:
+            log(
+                f"[sm-dispatcher] selected #{number}: "
+                f"failed return-to-study transition: {exc}"
+            )
+            if exc.looks_like_auth_failure or exc.looks_like_rate_limit:
+                raise
+            return
+        report.transitioned += 1
+        report.transitions.append(
+            (number, ACTIVE_SM_LABEL, NEEDS_STUDY_SM_LABEL)
+        )
+        log(
+            f"[sm-dispatcher] transitioned #{number}: "
+            f"selected → needs_study ({reason})"
+        )
         return
 
     art_label = decision.art_label or "art:unknown"
@@ -2721,6 +2792,129 @@ def _current_art_label(
     if len(arts) != 1:
         return None
     return arts[0]
+
+
+def _find_parsed_comment_of_type(
+    comments: list[dict[str, Any]],
+    expected_type: type,
+    *,
+    trusted_authors: frozenset[str],
+    log: Callable[[str], None],
+):
+    """Scan ``comments`` newest-first and return the first parsed match of
+    ``expected_type``, or ``None``.
+
+    Trust is enforced by :func:`alice_sm.comments.parse_comment` itself
+    (forged comments from untrusted authors parse to ``None``). Comments
+    that aren't ``[SM] <verb>`` shape are silently ignored.
+    """
+    from alice_sm.comments import parse_comment
+
+    for c in reversed(comments):
+        if not isinstance(c, dict):
+            continue
+        body = c.get("body")
+        if not isinstance(body, str):
+            continue
+        login = _comment_author_login(c)
+        parsed = parse_comment(
+            body,
+            login,
+            trusted_authors=trusted_authors,
+            log=log,
+        )
+        if isinstance(parsed, expected_type):
+            return parsed
+    return None
+
+
+def _process_draft(
+    *,
+    issue: dict[str, Any],
+    repo: str,
+    report: RunReport,
+    post_comment: PostCommentFn,
+    edit_labels: EditLabelsFn,
+    list_comments: ListCommentsFn,
+    trusted_authors: frozenset[str],
+    art_whitelist: frozenset[str],
+    dry_run: bool,
+    log: Callable[[str], None],
+) -> None:
+    """sm:draft → sm:needs_study on a trusted ``[SM] route-to-study`` comment.
+
+    The ``art=<art-label>`` field is optional. When present *and*
+    different from the issue's current ``art:*`` label, the dispatcher
+    swaps the label atomically with the state transition.
+    """
+    number = issue["number"]
+    decision = evaluate_trust(issue, trusted_authors=trusted_authors)
+    if not decision.accepted:
+        log(f"[sm-dispatcher] skipping #{number}: {decision.reason}")
+        report.skipped_trust += 1
+        return
+
+    try:
+        comments = list_comments(repo, number)
+    except GHCommandError as exc:
+        log(
+            f"[sm-dispatcher] draft #{number}: "
+            f"failed to list comments: {exc}"
+        )
+        if exc.looks_like_auth_failure or exc.looks_like_rate_limit:
+            raise
+        return
+
+    from alice_sm.comments import RouteToStudy
+
+    parsed = _find_parsed_comment_of_type(
+        comments,
+        RouteToStudy,
+        trusted_authors=trusted_authors,
+        log=log,
+    )
+    if parsed is None:
+        return
+
+    add_labels = [NEEDS_STUDY_SM_LABEL]
+    remove_labels = [DRAFT_SM_LABEL]
+    reason = "route-to-study"
+    if parsed.art_label is not None:
+        current_art = _current_art_label(issue, art_whitelist)
+        if parsed.art_label != current_art:
+            add_labels.append(parsed.art_label)
+            if current_art is not None:
+                remove_labels.append(current_art)
+        reason += f" art={parsed.art_label}"
+
+    transition_body = render_transition_comment(
+        DRAFT_SM_LABEL, NEEDS_STUDY_SM_LABEL, reason
+    )
+    if dry_run:
+        log(
+            f"[sm-dispatcher] DRY-RUN would transition #{number}: "
+            f"draft → needs_study ({reason})"
+        )
+        report.transitioned += 1
+        report.transitions.append((number, DRAFT_SM_LABEL, NEEDS_STUDY_SM_LABEL))
+        return
+    try:
+        edit_labels(repo, number, add=add_labels, remove=remove_labels)
+        post_comment(repo, number, transition_body)
+    except GHCommandError as exc:
+        log(
+            f"[sm-dispatcher] draft #{number}: "
+            f"failed route-to-study transition: {exc}"
+        )
+        if exc.looks_like_auth_failure or exc.looks_like_rate_limit:
+            raise
+        return
+    report.transitioned += 1
+    report.transitions.append((number, DRAFT_SM_LABEL, NEEDS_STUDY_SM_LABEL))
+    log(
+        f"[sm-dispatcher] transitioned #{number}: "
+        f"draft → needs_study ({reason})"
+    )
 
 
 def _process_needs_study(
@@ -3292,6 +3486,8 @@ def run(
                     post_comment=post_comment,
                     edit_labels=edit_labels,
                     find_linked_pr=find_linked_pr,
+                    list_comments=list_comments,
+                    trusted_authors=trusted_authors,
                     has_live_spawn=has_live_spawn,
                     count_running=count_running,
                     spawn=spawn,
@@ -3335,10 +3531,22 @@ def run(
                     log=log,
                     now_iso=now_iso,
                 )
+            elif sm_label == DRAFT_SM_LABEL:
+                _process_draft(
+                    issue=issue,
+                    repo=repo,
+                    report=report,
+                    post_comment=post_comment,
+                    edit_labels=edit_labels,
+                    list_comments=list_comments,
+                    trusted_authors=trusted_authors,
+                    art_whitelist=ART_LABEL_WHITELIST,
+                    dry_run=dry_run,
+                    log=log,
+                )
             else:
-                # Phase 1.5 doesn't act on draft / building / validating
-                # / done / rejected / blocked. Listed for visibility
-                # only.
+                # Phase 1.5 doesn't act on building / validating / done /
+                # rejected / blocked. Listed for visibility only.
                 log(f"[sm-dispatcher] #{number} at {sm_label} — no action this phase")
         except GHCommandError as exc:
             # Auth/rate-limit re-raised from inner handlers — bail.
