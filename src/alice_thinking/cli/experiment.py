@@ -3,9 +3,9 @@
 Why this exists
 ---------------
 
-Thinking's sleep wakes drive on pi-mono (``alice_pi.kernel.PiKernel``),
+Thinking's sleep wakes drive on pi-mono (``kernels.pi.kernel.PiKernel``),
 which has no MCP support — ``_translate_tools`` at
-``src/alice_pi/kernel.py:104-105`` strips every ``mcp__``-prefixed name
+``src/kernels/pi/kernel.py:104-105`` strips every ``mcp__``-prefixed name
 before handing the allowed-tools list to pi. The
 ``mcp__alice__run_experiment`` tool that thinking's MCP server exposes is
 therefore invisible to the local Qwen runtime. Pi-mono won't gain MCP, so
@@ -71,7 +71,7 @@ import pathlib
 import sys
 from typing import Any, Optional
 
-from alice_core.events import EventEmitter, EventLogger
+from core.events import EventEmitter, EventLogger
 
 from ..experiments import (
     ExperimentDispatchError,
