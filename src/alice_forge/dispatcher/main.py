@@ -871,6 +871,60 @@ def run(
                     now_iso=now_iso,
                 )
             elif sm_label == DRAFT_SM_LABEL:
+                # EC-2 (issue #294) — auto-classify ``art:*`` on draft
+                # entry. If the issue lacks any ``art:*`` label, the
+                # in-process keyword classifier proposes one (or falls
+                # back to ``art:pending``); we apply it via the
+                # ``edit_labels`` transport and patch the in-memory
+                # issue dict so v3 / legacy / trust filter all see the
+                # new label without a round-trip GH fetch. Wrapping in
+                # try/except so a transient GH error never aborts the
+                # whole cadence — the next pass will retry.
+                from alice_forge.dispatcher.art_classifier import (
+                    auto_label as _auto_label_art,
+                )
+
+                _labels_now = _label_names(issue)
+                if not any(lab.startswith("art:") for lab in _labels_now):
+                    _suggested = _auto_label_art(
+                        title=issue.get("title") or "",
+                        body=issue.get("body") or "",
+                        existing_labels=_labels_now,
+                    )
+                    if _suggested:
+                        if dry_run:
+                            log(
+                                f"[sm-dispatcher] DRY-RUN would apply "
+                                f"{_suggested!r} to draft #{number} "
+                                f"(art-classifier)"
+                            )
+                        else:
+                            try:
+                                edit_labels(
+                                    repo,
+                                    number,
+                                    add=[_suggested],
+                                    remove=[],
+                                )
+                            except Exception as _exc:  # noqa: BLE001
+                                log(
+                                    f"[sm-dispatcher] draft #{number}: "
+                                    f"art-classifier failed to apply "
+                                    f"{_suggested!r}: "
+                                    f"{type(_exc).__name__}: {_exc}"
+                                )
+                            else:
+                                log(
+                                    f"[art-classifier] #{number}: "
+                                    f"applied {_suggested!r}"
+                                )
+                                # Patch in-memory issue dict so
+                                # downstream v3 + legacy + trust filter
+                                # see the new label this pass.
+                                issue.setdefault("labels", []).append(
+                                    {"name": _suggested}
+                                )
+
                 # SM v3 Phase 4: v3 owns sm:draft transitions when the
                 # state is in ``v3_authoritative_states``. The legacy
                 # ``_process_draft`` still handles the triage-surface
