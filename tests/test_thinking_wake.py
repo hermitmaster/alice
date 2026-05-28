@@ -168,6 +168,7 @@ def _stub_main_dependencies(monkeypatch, tmp_path, *, phase_value):
     monkeypatch.setattr(wake_module, "select_phase", lambda *a, **kw: phase_value)
     monkeypatch.setattr(wake_module, "detect_commission_notes", lambda *a, **kw: [])
     monkeypatch.setattr(wake_module, "detect_conflict_notes", lambda *a, **kw: [])
+    monkeypatch.setattr(wake_module, "ensure_auth_env", lambda *a, **kw: None)
     monkeypatch.setattr(
         wake_module,
         "load_phase_config",
