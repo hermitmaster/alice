@@ -395,7 +395,38 @@ def _build_context(args: argparse.Namespace, personae) -> WakeContext:
     )
 
 
+#: Liveness file the container HEALTHCHECK probes for thinking-side wedges.
+#: Touched at the start of each wake, BEFORE any model calls — so a wake
+#: stuck in the kernel (e.g. claude CLI swallowing CancelledError) shows up
+#: as a stuck mtime well within the 600s staleness window the HEALTHCHECK
+#: applies. The touch site swallows ONLY FileNotFoundError so dev/test
+#: environments (where /state/worker/ doesn't exist) can run wake.main()
+#: as a no-op heartbeat; in prod the directory is guaranteed by
+#: sandbox/s6/init-state-perms, and a genuinely missing file is caught by
+#: the HEALTHCHECK's mtime-staleness test. Other OSErrors (PermissionError,
+#: read-only FS, etc.) are NOT swallowed — those are real failures we want
+#: surfaced. See sandbox/Dockerfile HEALTHCHECK comment.
+THINKING_LIVENESS_PATH = pathlib.Path("/state/worker/thinking-alive")
+
+
+def _touch_liveness(path: pathlib.Path) -> None:
+    """Touch the thinking-side liveness file so the container HEALTHCHECK
+    sees a fresh mtime. Extracted as a function so the unit test can pass
+    a tmp_path override. Swallows FileNotFoundError only (parent dir
+    missing) for dev/test environments; other OSErrors propagate."""
+    try:
+        path.touch()
+    except FileNotFoundError:
+        pass
+
+
 def main() -> int:
+    # Liveness heartbeat — fires BEFORE argparse / config / model calls.
+    # If the wake hangs in the kernel later, the next cron tick (5 min)
+    # will refresh; if the wake dies before this line, the HEALTHCHECK
+    # window (600s) catches it. NOT wrapped in try/except: if
+    # /state/worker isn't writable, the probe SHOULD fire.
+    _touch_liveness(THINKING_LIVENESS_PATH)
     parser = argparse.ArgumentParser(
         description="One thinking wake (Claude Agent kernel)."
     )
