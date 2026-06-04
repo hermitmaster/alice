@@ -312,8 +312,12 @@ class SignalTransport:
                     # batch head so the deep-thread deferral hook (TODO
                     # — needs SessionDepthSignal) has the inbound event
                     # to inspect.
-                    await ctx._pre_turn(head)
-                    await handle_signal(ctx, batch)
+                    ctx.face.set_state("thinking")
+                    try:
+                        await ctx._pre_turn(head)
+                        await handle_signal(ctx, batch)
+                    finally:
+                        ctx.face.set_idle()
             except Exception:  # noqa: BLE001
                 log.exception("signal consume error")
             finally:
