@@ -63,6 +63,7 @@ from .domain.turn_log import TurnLog
 from .infra import config as config_module
 from .infra.config import Config
 from .infra.events import EventLogger
+from .infra.face_presence import FacePresence
 from .infra.signal_rpc import SignalRPC as SignalClient
 from .internal import (
     BackgroundTaskCompleteEvent,
@@ -170,6 +171,9 @@ class SpeakingDaemon:
         self.dedup = DedupStore(cfg.seen_path)
         self.turns = TurnLog(cfg.turn_log_path)
         self.events = EventLogger(cfg.event_log_path)
+        self.face = FacePresence(
+            quiet_hours_fn=lambda: is_quiet_hours(self.cfg.speaking),
+        )
         self.quiet_queue = QuietQueue(
             cfg.mind_dir / "inner" / "state" / "quiet-queue.jsonl"
         )
@@ -783,6 +787,7 @@ class SpeakingDaemon:
                 log.info("signal disabled (no SIGNAL_ACCOUNT); skipping signal-cli")
             log.info("daemon ready; listening")
             self.events.emit("daemon_ready", signal_api=self.cfg.signal_api)
+            self.face.set_idle()
 
             # If quiet hours ended while we were down, drain the queue first.
             if not is_quiet_hours(self.cfg.speaking) and self.quiet_queue.size() > 0:
@@ -1098,8 +1103,12 @@ class SpeakingDaemon:
                     log.warning("no handler for event type: %s", type(event).__name__)
                     continue
                 async with self._turn_lock:
-                    await self._pre_turn(event)
-                    await source.handle(ctx, event)
+                    self.face.set_state("thinking")
+                    try:
+                        await self._pre_turn(event)
+                        await source.handle(ctx, event)
+                    finally:
+                        self.face.set_idle()
             except Exception:
                 log.exception("consumer error handling %s", type(event).__name__)
             finally:
@@ -1591,13 +1600,14 @@ class SpeakingDaemon:
             or bool(attachments)
         )
 
-        await self._dispatch_outbound(
-            channel,
-            text,
-            attachments,
-            emergency=emergency,
-            bypass_quiet=bypass_quiet,
-        )
+        async with self.face.speaking():
+            await self._dispatch_outbound(
+                channel,
+                text,
+                attachments,
+                emergency=emergency,
+                bypass_quiet=bypass_quiet,
+            )
         self._turn_last_outbound = text
         self._turn_did_send = True
         # Drain-stopper for mid-turn injection. Once the user-visible
