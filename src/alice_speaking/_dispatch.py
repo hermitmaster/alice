@@ -45,6 +45,26 @@ def _vault_snapshot(ctx: DaemonContext) -> tuple[Optional[str], Optional[list[di
         getattr(runner, "last_vault_candidates", None),
     )
 
+
+def _tool_calls_snapshot(ctx: DaemonContext) -> list[dict]:
+    """Read the structured tool calls the just-finished turn made off the
+    turn runner, so they can be persisted on the ``new_turn(...)`` entry.
+
+    Mirrors :func:`_vault_snapshot`: ``getattr`` defensively because
+    older/stub runners may not set ``last_tool_calls``. Returns ``[]``
+    (never ``None``) so the turn-log field stays a plain list.
+    """
+    runner = getattr(ctx, "turn_runner", None)
+    if runner is None:
+        return []
+    # ``last_tool_calls`` entries carry a truncated ``input`` for the eval
+    # harness; strip it here so the persisted turn log stays name+id only
+    # and the ``MAX_FIELD_BYTES`` discipline is unchanged.
+    return [
+        {"name": tc.get("name"), "id": tc.get("id")}
+        for tc in (getattr(runner, "last_tool_calls", None) or [])
+    ]
+
 if TYPE_CHECKING:
     from .daemon import (
         A2AEvent,
@@ -229,6 +249,7 @@ async def handle_signal(ctx: DaemonContext, batch: list["SignalEvent"]) -> None:
         # get None so render_for_prompt() doesn't emit duplicate
         # `[alice]` lines for what was a single reply.
         vault_context, vault_candidates = _vault_snapshot(ctx)
+        tool_calls = _tool_calls_snapshot(ctx)
         for i, ev in enumerate(batch):
             is_last = i == len(batch) - 1
             ctx.turns.append(
@@ -243,6 +264,7 @@ async def handle_signal(ctx: DaemonContext, batch: list["SignalEvent"]) -> None:
                     # the prompt; earlier envelopes get None.
                     vault_context=vault_context if is_last else None,
                     vault_candidates=vault_candidates if is_last else None,
+                    tool_calls=tool_calls if is_last else [],
                 )
             )
         ctx.events.emit(
@@ -334,6 +356,7 @@ async def handle_cli(ctx: DaemonContext, event: "CLIEvent") -> None:
         ctx._current_reply_channel = prev_channel
         ctx._current_principal_display_name = prev_display_name
         vault_context, vault_candidates = _vault_snapshot(ctx)
+        tool_calls = _tool_calls_snapshot(ctx)
         ctx.turns.append(
             new_turn(
                 sender_number=msg.principal.native_id,
@@ -343,6 +366,7 @@ async def handle_cli(ctx: DaemonContext, event: "CLIEvent") -> None:
                 error=error,
                 vault_context=vault_context,
                 vault_candidates=vault_candidates,
+                tool_calls=tool_calls,
             )
         )
         ctx.events.emit(
@@ -424,6 +448,7 @@ async def handle_ws(ctx: DaemonContext, event: "WSEvent") -> None:
         ctx._current_reply_channel = prev_channel
         ctx._current_principal_display_name = prev_display_name
         vault_context, vault_candidates = _vault_snapshot(ctx)
+        tool_calls = _tool_calls_snapshot(ctx)
         ctx.turns.append(
             new_turn(
                 sender_number=msg.principal.native_id,
@@ -433,6 +458,7 @@ async def handle_ws(ctx: DaemonContext, event: "WSEvent") -> None:
                 error=error,
                 vault_context=vault_context,
                 vault_candidates=vault_candidates,
+                tool_calls=tool_calls,
             )
         )
         ctx.events.emit(
@@ -509,6 +535,7 @@ async def handle_discord(ctx: DaemonContext, event: "DiscordEvent") -> None:
         ctx._current_reply_channel = prev_channel
         ctx._current_principal_display_name = prev_display_name
         vault_context, vault_candidates = _vault_snapshot(ctx)
+        tool_calls = _tool_calls_snapshot(ctx)
         ctx.turns.append(
             new_turn(
                 sender_number=msg.principal.native_id,
@@ -518,6 +545,7 @@ async def handle_discord(ctx: DaemonContext, event: "DiscordEvent") -> None:
                 error=error,
                 vault_context=vault_context,
                 vault_candidates=vault_candidates,
+                tool_calls=tool_calls,
             )
         )
         ctx.events.emit(
@@ -608,6 +636,7 @@ async def handle_viewer_chat(ctx: DaemonContext, event: "ViewerChatEvent") -> No
         ctx._current_reply_channel = prev_channel
         ctx._current_principal_display_name = prev_display_name
         vault_context, vault_candidates = _vault_snapshot(ctx)
+        tool_calls = _tool_calls_snapshot(ctx)
         ctx.turns.append(
             new_turn(
                 sender_number=msg.principal.native_id,
@@ -617,6 +646,7 @@ async def handle_viewer_chat(ctx: DaemonContext, event: "ViewerChatEvent") -> No
                 error=error,
                 vault_context=vault_context,
                 vault_candidates=vault_candidates,
+                tool_calls=tool_calls,
             )
         )
         ctx.events.emit(
@@ -691,6 +721,7 @@ async def handle_a2a(ctx: DaemonContext, event: "A2AEvent") -> None:
         ctx._current_reply_channel = prev_channel
         ctx._current_principal_display_name = prev_display_name
         vault_context, vault_candidates = _vault_snapshot(ctx)
+        tool_calls = _tool_calls_snapshot(ctx)
         ctx.turns.append(
             new_turn(
                 sender_number=msg.principal.native_id,
@@ -700,6 +731,7 @@ async def handle_a2a(ctx: DaemonContext, event: "A2AEvent") -> None:
                 error=error,
                 vault_context=vault_context,
                 vault_candidates=vault_candidates,
+                tool_calls=tool_calls,
             )
         )
         ctx.events.emit(
