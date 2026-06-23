@@ -62,6 +62,12 @@ ALLOWLIST_FILES: frozenset[str] = frozenset(
         # it from personae in production, but the SDK-side default must
         # remain a literal string.
         "alice_speaking/transports/a2a.py",
+        # Gmail transport's outbound Subject fallback ("Message from
+        # Alice") when an inbound thread carries no subject. This is a
+        # human-facing email header the recipient reads, not an agent
+        # prompt surface — same rationale as rating_ui.py. send() has no
+        # personae handle, so it's a genuine default fallback literal.
+        "alice_speaking/transports/gmail.py",
         # Haiku-tier run-summary prompt template: names the agent
         # descriptively inside the system prompt ("the agent (named
         # Alice)…", "Write the summary in third person ('Alice did X')").

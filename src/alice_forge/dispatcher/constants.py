@@ -269,19 +269,19 @@ def _now_iso() -> str:
 # natural absence is sufficient — no defensive guard required.
 THINKING_RUNTIME_LABEL = os.environ.get(
     "ALICE_THINKING_RUNTIME_LABEL",
-    "claude-agent-sdk",
+    "claude-agent-sdk:opus",
 )
 SPEAKING_RUNTIME_LABEL = os.environ.get(
     "ALICE_SPEAKING_RUNTIME_LABEL",
-    "claude-agent-sdk",
+    "claude-agent-sdk:opus",
 )
 REVIEWER_RUNTIME_LABEL = os.environ.get(
     "ALICE_REVIEWER_RUNTIME_LABEL",
-    "claude-agent-sdk",
+    "claude-agent-sdk:sonnet",
 )
 DESIGN_REVIEWER_RUNTIME_LABEL = os.environ.get(
     "ALICE_DESIGN_REVIEWER_RUNTIME_LABEL",
-    "claude-agent-sdk",
+    "claude-agent-sdk:opus",
 )
 
 _DEFAULT_SPAWN_MAP: dict[tuple[str, str], dict[str, str]] = {

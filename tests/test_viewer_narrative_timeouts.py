@@ -68,7 +68,7 @@ async def test_summarize_bucket_times_out_on_slow_llm(monkeypatch):
 
     monkeypatch.setattr(nmod, "BUCKET_MAX_SECONDS", 0.05)
 
-    async def slow_run_once(prompt, *, max_output_tokens_hint=500):
+    async def slow_run_once(prompt, *, backend=None, model="", max_output_tokens_hint=500):
         await asyncio.sleep(1.0)
         return "should never be reached", 0.0
 
@@ -85,7 +85,7 @@ async def test_summarize_bucket_returns_summary_on_success(monkeypatch):
     :class:`BucketSummary`, so the timeout wrapper isn't accidentally
     truncating the happy path."""
 
-    async def fast_run_once(prompt, *, max_output_tokens_hint=500):
+    async def fast_run_once(prompt, *, backend=None, model="", max_output_tokens_hint=500):
         return "  a tidy summary  ", 0.0042
 
     monkeypatch.setattr(nmod, "_run_once", fast_run_once)
@@ -119,7 +119,7 @@ async def test_ensure_bucket_cache_isolates_one_slow_bucket(monkeypatch, tmp_pat
     monkeypatch.setattr(nmod, "BUCKET_MAX_SECONDS", 0.05)
     monkeypatch.setattr(nmod, "_bucket_prompt", lambda slot: "stub-prompt")
 
-    async def selective_run_once(prompt, *, max_output_tokens_hint=500):
+    async def selective_run_once(prompt, *, backend=None, model="", max_output_tokens_hint=500):
         # Distinguish the two slots by inspecting the call counter —
         # first call is "slow", second is "fast". This avoids leaning
         # on which slot the gather() schedules first because the
@@ -164,7 +164,7 @@ async def test_ensure_bucket_cache_all_success(monkeypatch, tmp_path):
     monkeypatch.setenv("ALICE_VIEWER_CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(nmod, "_bucket_prompt", lambda slot: "stub-prompt")
 
-    async def fast(prompt, *, max_output_tokens_hint=500):
+    async def fast(prompt, *, backend=None, model="", max_output_tokens_hint=500):
         return "ok", 0.0
 
     monkeypatch.setattr(nmod, "_run_once", fast)
@@ -187,29 +187,44 @@ async def test_ensure_bucket_cache_all_success(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_stream_narrative_emits_error_on_wall_clock_timeout(monkeypatch):
-    """When the SDK iterator hangs past ``DEFAULT_MAX_SECONDS``,
-    ``stream_narrative`` must emit a structured ``error`` event so the
-    SSE handler in the viewer can surface it (vs. the connection just
-    closing on the client)."""
+    """When the kernel hits its wall-clock cap, ``stream_narrative``
+    must emit a structured ``error`` event so the SSE handler in the
+    viewer can surface it (vs. the connection just closing on the
+    client). The kernel enforces ``max_seconds`` and reports a
+    ``timeout`` result; narrative translates that into the SSE error."""
 
-    import claude_agent_sdk as sdk
+    import core.kernel as kernel_mod
 
-    async def hanging_query(*, prompt, options):
-        # Never yield — simulate a stalled provider stream.
-        await asyncio.sleep(10.0)
-        if False:  # pragma: no cover — keeps this a generator function
-            yield None
+    @dataclass
+    class _Result:
+        duration_ms: int = 100
+        cost_usd: float = 0.0
+        session_id: str = "sess"
+        error: str = "timeout"
+        is_error: bool = False
+        text: str = ""
 
-    monkeypatch.setattr(sdk, "query", hanging_query)
+    class _TimeoutKernel:
+        async def run(self, prompt, spec, handlers):
+            return _Result()
+
+    monkeypatch.setattr(
+        kernel_mod, "make_kernel", lambda *a, **k: _TimeoutKernel()
+    )
     monkeypatch.setattr(nmod, "_ensure_auth", lambda: _NoAuth())
 
+    class _Backend:
+        model = "test-viewer-model"
+
     events = []
-    async for ev in nmod.stream_narrative("prompt", max_seconds=0.1):
+    async for ev in nmod.stream_narrative(
+        "prompt", backend=_Backend(), max_seconds=0.1
+    ):
         events.append(ev)
 
     assert any(e.get("type") == "error" for e in events), events
     err = next(e for e in events if e.get("type") == "error")
-    # The TimeoutError branch surfaces a message that mentions the cap;
+    # The timeout branch surfaces a message that mentions the cap;
     # callers downstream just propagate ``message`` verbatim to SSE.
     assert "timed out" in err["message"].lower()
 
