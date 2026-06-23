@@ -102,6 +102,11 @@ CLI (Unix-socket) and Discord transports are also wired. All three feed one
 inbound pipeline (`alice_speaking`); outbound is always explicit (the agent
 must call `send_message` — returning text alone does not reach the user).
 
+Gmail is optional and uses IMAP inbound plus SMTP outbound. Set
+`GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` in `alice.env`, then add matching
+`gmail` channels for allowed senders in `principals.yaml`. Email threads are
+tracked as separate durable conversations even when they share a sender.
+
 ### Sleep-mode synthesis
 
 Between 23:00 and 07:00 Thinking shifts into a sleep cycle modeled on

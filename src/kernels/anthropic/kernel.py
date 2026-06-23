@@ -162,7 +162,7 @@ class AnthropicKernel:
         kernel = AnthropicKernel(emitter, correlation_id="turn-abc123")
         result = await kernel.run(
             prompt="hello",
-            spec=KernelSpec(model="claude-sonnet-4-6", allowed_tools=["Bash"]),
+            spec=KernelSpec(model=os.environ["ALICE_KERNEL_MODEL"], allowed_tools=["Bash"]),
             handlers=[SessionHandler(...)],
         )
     """

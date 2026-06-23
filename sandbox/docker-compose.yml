@@ -114,15 +114,33 @@ services:
       # above.
       ALICE_VIEWER_CHAT_DAEMON_HOST: "127.0.0.1"
       ALICE_VIEWER_CHAT_DAEMON_PORT: "8182"
-      # LiteLLM proxy — unified endpoint for local models (Qwen LAN
-      # endpoint today; future cloud passthrough TBD). Call sites
+      # LiteLLM proxy — unified endpoint for local models. Call sites
       # (viewer.lobe_labeler, alice_thinking.stage_d_judges,
       # alice_thinking.workflows.stage_b.subroutines) read this and
       # talk OpenAI-compatible to the sidecar; the proxy maps virtual
-      # model names (qwen-local, qwen-rerank) to actual backends in
-      # sandbox/litellm/config.yaml. Hostname resolves on compose's
-      # default network bridge.
+      # model names to actual backends in sandbox/litellm/config.yaml.
+      # Hostname resolves on compose's default network bridge.
       LITELLM_BASE_URL: "http://alice-litellm:4000/v1"
+      LITELLM_QWEN_MODEL: "${LITELLM_QWEN_MODEL}"
+      LITELLM_LABEL_MODEL: "${LITELLM_LABEL_MODEL}"
+      LITELLM_NARRATOR_MODEL: "${LITELLM_NARRATOR_MODEL}"
+      LITELLM_FACE_CAPTION_MODEL: "${LITELLM_FACE_CAPTION_MODEL}"
+      ALICE_RUN_SUMMARY_MODEL: "${ALICE_RUN_SUMMARY_MODEL}"
+      ALICE_VIEWER_NARRATIVE_MODEL: "${ALICE_VIEWER_NARRATIVE_MODEL}"
+      ALICE_VIEWER_BUCKET_MODEL: "${ALICE_VIEWER_BUCKET_MODEL}"
+      ALICE_AGENT_DEFAULT_MODEL: "${ALICE_AGENT_DEFAULT_MODEL}"
+      ALICE_AGENT_REVIEWER_MODEL: "${ALICE_AGENT_REVIEWER_MODEL}"
+      ALICE_DESIGN_REVIEWER_MODEL: "${ALICE_DESIGN_REVIEWER_MODEL}"
+      ALICE_EXPERIMENT_SUBAGENT_MODEL: "${ALICE_EXPERIMENT_SUBAGENT_MODEL}"
+      ALICE_THINKING_RUNTIME_LABEL: "${ALICE_THINKING_RUNTIME_LABEL}"
+      ALICE_SPEAKING_RUNTIME_LABEL: "${ALICE_SPEAKING_RUNTIME_LABEL}"
+      ALICE_REVIEWER_RUNTIME_LABEL: "${ALICE_REVIEWER_RUNTIME_LABEL}"
+      ALICE_DESIGN_REVIEWER_RUNTIME_LABEL: "${ALICE_DESIGN_REVIEWER_RUNTIME_LABEL}"
+      ALICE_SPEAKING_PERISSUE_MODEL: "${ALICE_SPEAKING_PERISSUE_MODEL}"
+      ALICE_SPEAKING_REVIEW_MODEL: "${ALICE_SPEAKING_REVIEW_MODEL}"
+      ALICE_THINKING_PERISSUE_MODEL: "${ALICE_THINKING_PERISSUE_MODEL}"
+      ALICE_THINKING_STATUS_MODEL: "${ALICE_THINKING_STATUS_MODEL}"
+      ALICE_CORRECTION_CASCADE_MODEL: "${ALICE_CORRECTION_CASCADE_MODEL}"
       # Shared key the call sites send as a Bearer token to the proxy
       # (same value as the litellm service's LITELLM_MASTER_KEY). Read by
       # core.llm_client, lobe_labeler, thinking stage_b/d; pi gets it via the
@@ -189,9 +207,9 @@ services:
 
   # LiteLLM proxy — single OpenAI-compatible endpoint for all local
   # model traffic. Call sites use LITELLM_BASE_URL (set on the alice
-  # service above) plus a virtual model name (qwen-local, qwen-rerank)
-  # which the proxy maps to the actual backend in
-  # sandbox/litellm/config.yaml. Sidecar (not s6 inside alice) so the
+  # service above) plus a configured virtual model name which the proxy
+  # maps to the actual backend in sandbox/litellm/config.yaml. Sidecar
+  # (not s6 inside alice) so the
   # proxy restarts and logs independently; if it crashes, speaking and
   # thinking see 502s on local-model calls and recover when it comes
   # back rather than the whole worker tipping over.

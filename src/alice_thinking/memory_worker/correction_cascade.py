@@ -612,7 +612,7 @@ def detect_corrections(
                 continue
 
             ref_slug = _slug_of(ref_md)
-            _, ref_body = _frontmatter_read(ref_md)
+            ref_fm, ref_body = _frontmatter_read(ref_md)
 
             # Check if this note also references the correction.
             # Resolve both the frontmatter slug form and the filename-stem
@@ -622,7 +622,28 @@ def detect_corrections(
             stem = correction_md.stem
             if stem != correction_slug:
                 correction_forms.append(stem)
-            if any(f"[[{form}" in ref_body for form in correction_forms):
+
+            # Check body for wikilinks to the correction.
+            body_has = any(f"[[{form}" in ref_body for form in correction_forms)
+
+            # Also check frontmatter values — a referencing note may wikilink
+            # the correction in fields like `references:`, `supersedes:`, etc.
+            # The body-only check misses these, causing false positives.
+            fm_has = False
+            for val in ref_fm.values():
+                if isinstance(val, str):
+                    if any(f"[[{form}" in val for form in correction_forms):
+                        fm_has = True
+                        break
+                elif isinstance(val, list):
+                    for item in val:
+                        if isinstance(item, str) and any(f"[[{form}" in item for form in correction_forms):
+                            fm_has = True
+                            break
+                if fm_has:
+                    break
+
+            if body_has or fm_has:
                 logger.info(
                     "correction_cascade: %s already references %s — OK",
                     ref_slug,

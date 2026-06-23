@@ -267,7 +267,24 @@ def _now_iso() -> str:
 # concrete ``art:*`` value. The dispatcher's SPAWN_MAP lookup already
 # returns nothing for unrecognized ``(sm:*, art:*)`` pairs, so the
 # natural absence is sufficient — no defensive guard required.
-SPAWN_MAP: dict[tuple[str, str], dict[str, str]] = {
+THINKING_RUNTIME_LABEL = os.environ.get(
+    "ALICE_THINKING_RUNTIME_LABEL",
+    "claude-agent-sdk",
+)
+SPEAKING_RUNTIME_LABEL = os.environ.get(
+    "ALICE_SPEAKING_RUNTIME_LABEL",
+    "claude-agent-sdk",
+)
+REVIEWER_RUNTIME_LABEL = os.environ.get(
+    "ALICE_REVIEWER_RUNTIME_LABEL",
+    "claude-agent-sdk",
+)
+DESIGN_REVIEWER_RUNTIME_LABEL = os.environ.get(
+    "ALICE_DESIGN_REVIEWER_RUNTIME_LABEL",
+    "claude-agent-sdk",
+)
+
+_DEFAULT_SPAWN_MAP: dict[tuple[str, str], dict[str, str]] = {
     # SM v2 design lane. The per-issue thinking-agent reads the issue,
     # produces a design note at
     # ``~/alice-mind/cortex-memory/designs/<date>-issue<N>-<slug>.md``,
@@ -275,7 +292,7 @@ SPAWN_MAP: dict[tuple[str, str], dict[str, str]] = {
     # issue to ``sm:design_review``.
     ("sm:selected", "art:code"): {
         "persona": "thinking",
-        "runtime": "claude-agent-sdk:opus",
+        "runtime": THINKING_RUNTIME_LABEL,
         "phase": "per_issue_design",
         "agent_spec": "designer",
     },
@@ -302,7 +319,7 @@ SPAWN_MAP: dict[tuple[str, str], dict[str, str]] = {
     # :func:`_process_building` picks the linked PR up on the next pass.
     ("sm:designed", "art:code"): {
         "persona": "speaking",
-        "runtime": "claude-agent-sdk:opus",
+        "runtime": SPEAKING_RUNTIME_LABEL,
         "phase": "per_issue_build",
         "agent_spec": "speaking",
     },
@@ -314,13 +331,86 @@ SPAWN_MAP: dict[tuple[str, str], dict[str, str]] = {
     # returns the structured JSON verdict defined in that module.
     ("sm:reviewing", "art:code"): {
         "persona": "reviewer",
-        "runtime": "claude-agent-sdk:sonnet",
+        "runtime": REVIEWER_RUNTIME_LABEL,
         "agent_spec": "reviewer",
         "system_prompt_module": (
             "alice_speaking.review.code_reviewer:CODE_REVIEWER_SYSTEM_PROMPT"
         ),
     },
 }
+
+
+def _coerce_spawn_row(row: Any) -> tuple[tuple[str, str], dict[str, str]] | None:
+    if not isinstance(row, dict):
+        return None
+    sm_state = row.get("sm_state") or row.get("state")
+    art_label = row.get("art_label") or row.get("artifact")
+    if not isinstance(sm_state, str) or not sm_state.strip():
+        return None
+    if not isinstance(art_label, str) or not art_label.strip():
+        return None
+    payload: dict[str, str] = {}
+    for key in ("persona", "runtime", "phase", "agent_spec", "system_prompt_module"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            payload[key] = value.strip()
+    if not payload.get("agent_spec"):
+        return None
+    return (sm_state.strip(), art_label.strip()), payload
+
+
+def load_spawn_map(
+    *,
+    config_path: pathlib.Path = DEFAULT_DISPATCHER_CONFIG_PATH,
+    log: Callable[[str], None] = lambda s: print(s, file=sys.stderr),
+) -> dict[tuple[str, str], dict[str, str]]:
+    """Read the ``sm_dispatcher.spawn_map`` block from alice.config.json.
+
+    Missing file, unreadable file, missing block, or malformed rows
+    fall back to the in-code default map so old deploys keep working.
+
+    Expected JSON shape::
+
+        {
+          "sm_dispatcher": {
+            "spawn_map": [
+              {
+                "sm_state": "sm:selected",
+                "art_label": "art:code",
+                "persona": "thinking",
+                "runtime": "claude-agent-sdk",
+                "phase": "per_issue_design",
+                "agent_spec": "designer"
+              }
+            ]
+          }
+        }
+    """
+    fallback = dict(_DEFAULT_SPAWN_MAP)
+    if not config_path.is_file():
+        return fallback
+    try:
+        raw = json.loads(config_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        log(f"[sm-dispatcher] failed to read {config_path}: {exc}")
+        return fallback
+    block = (raw or {}).get("sm_dispatcher")
+    if not isinstance(block, dict):
+        return fallback
+    entries = block.get("spawn_map")
+    if not isinstance(entries, list) or not entries:
+        return fallback
+    out: dict[tuple[str, str], dict[str, str]] = dict(fallback)
+    for entry in entries:
+        coerced = _coerce_spawn_row(entry)
+        if coerced is None:
+            log(f"[sm-dispatcher] skipping malformed spawn_map row: {entry!r}")
+            continue
+        out[coerced[0]] = coerced[1]
+    return out
+
+
+SPAWN_MAP = load_spawn_map()
 
 # Cap on simultaneously running claude subprocess spawns. Excess
 # eligible ``sm:selected`` issues stay queued until the next dispatcher
@@ -382,12 +472,6 @@ MAX_CONCURRENT_THINKING_SPAWNS = int(
 # the two spawn events without re-implementing the parser cascade.
 THINKING_SPAWN_STARTED_PREFIX = "[SM] thinking-spawn-started"
 
-# Runtime label rendered into the audit comment. The shim itself is a
-# Python entrypoint, but the *agent* it boots talks to claude-agent-sdk
-# at Opus depth — that's the row in the persona × runtime matrix
-# (``[[2026-05-12-sm-v2-agent-type-system]]``).
-THINKING_RUNTIME_LABEL = "claude-agent-sdk:opus"
-
 # Per-issue phase the thinking-agent enters at spawn time. The dispatcher
 # only handles the design phase here; build-phase entry is via the
 # compaction restart (sub-issue 4) and reuses the same shim with
@@ -446,13 +530,6 @@ MAX_CONCURRENT_SPEAKING_SPAWNS = int(
 # a body-shape cascade. Neither is a prefix of the other.
 SPEAKING_SPAWN_STARTED_PREFIX = "[SM] speaking-spawn-started"
 
-# Runtime label rendered into the audit comment. The shim is a Python
-# entrypoint; the *agent* it boots reaches for the Task/Agent tool to
-# dispatch the actual implementation sub-agent (claude-agent-sdk at Opus
-# depth), per the persona × runtime matrix in
-# ``[[2026-05-12-sm-v2-agent-type-system]]``.
-SPEAKING_RUNTIME_LABEL = "claude-agent-sdk:opus"
-
 # Per-issue phase the speaking-agent enters at spawn time. The dispatcher
 # only handles the build phase here; the design phase belongs to the
 # thinking-agent (see :data:`THINKING_PHASE_PER_ISSUE_DESIGN`).
@@ -507,9 +584,6 @@ MAX_CONCURRENT_DESIGN_REVIEWER_SPAWNS = int(
 # disambiguate without a body-shape cascade. Neither is a prefix of the
 # other.
 DESIGN_REVIEWER_SPAWN_STARTED_PREFIX = "[SM] design-reviewer-spawn-started"
-
-# Runtime label rendered into the audit comment.
-DESIGN_REVIEWER_RUNTIME_LABEL = "claude-agent-sdk:opus"
 
 # Per-issue phase the design-reviewer enters at spawn time.
 DESIGN_REVIEWER_PHASE = "per_issue_design_review"

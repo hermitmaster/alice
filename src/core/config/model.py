@@ -20,14 +20,14 @@ Schema (full form):
     speaking:
       harness: claude-code
       backend: subscription
-      model: claude-opus-4-7
+      model: <speaking-model>
     thinking:
       harness: pi-mono               # routes through pi-coding-agent
       backend: pi
-      model: gpt-5.3-codex           # PiKernel adds openai-codex/ prefix
+      model: <pi-provider>/<thinking-model>
     viewer:
       backend: subscription
-      model: claude-haiku-4-5-20251001
+      model: <viewer-model>
     backends:
       api:
         base_url: https://litellm.example.com/v1

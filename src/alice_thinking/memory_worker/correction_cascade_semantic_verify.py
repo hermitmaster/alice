@@ -45,6 +45,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import pathlib
 from typing import Optional
 
@@ -63,9 +64,9 @@ _DRY_RUN = True
 #: Maximum LLM calls per verification run.
 _MAX_LLM_CALLS = 50
 
-#: Model to use for classification. ``"qwen"`` for local (cheap),
-#: ``"sonnet"`` for Anthropic (accurate). Default is ``"qwen"``.
-_MODEL = "qwen"
+#: Model to use for classification. Configured externally so this module
+#: does not embed a model choice.
+_MODEL = os.environ.get("ALICE_CORRECTION_CASCADE_MODEL", "")
 
 # ---------- data types ----------
 
@@ -242,11 +243,18 @@ def _classify_with_llm(
     if _DRY_RUN:
         return ("yes", "dry-run skip")
 
-    # Try lite_llm first (local Qwen), fall back to mock
+    # Use the shared raw OpenAI-compatible LLM seam; fall back to mock.
     try:
-        from alice_thinking.llm_client import LiteLLMClient
-        client = LiteLLMClient(model=_MODEL, max_tokens=100, temperature=0.0)
-        response = client.call(prompt)
+        if not _MODEL:
+            raise RuntimeError(
+                "ALICE_CORRECTION_CASCADE_MODEL is not configured"
+            )
+        import asyncio
+
+        from core.llm_client import LLMClient
+
+        client = LLMClient(model=_MODEL, max_tokens=100, temperature=0.0)
+        response = asyncio.run(client.complete_text(prompt))
         return _parse_llm_response(response)
     except Exception as e:
         logger.warning("LLM classification failed (%s), using mock", e)

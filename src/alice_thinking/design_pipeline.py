@@ -71,7 +71,7 @@ __all__ = [
 ]
 
 
-DEFAULT_REVIEWER_MODEL = "claude-sonnet-4-6"
+DEFAULT_REVIEWER_MODEL = os.environ.get("ALICE_DESIGN_REVIEWER_MODEL", "")
 
 
 REVIEWER_SYSTEM_PROMPT = """You are a structural reviewer for design documents.

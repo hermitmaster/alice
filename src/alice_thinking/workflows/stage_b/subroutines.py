@@ -55,14 +55,14 @@ __all__ = [
 # Resolved local-model config (issue #420)
 # ---------------------------------------------------------------------------
 #
-# ``LITELLM_QWEN_MODEL`` is the qwen-local virtual model name as seen by
+# ``LITELLM_QWEN_MODEL`` is the configured virtual model name as seen by
 # google-adk's LiteLlm wrapper — value carries an ``openai/`` provider
 # prefix so the wrapper knows to dispatch via the OpenAI-compatible
 # transport. Shared with ``alice_thinking.stage_d_judges``; the cozylobe
 # narrator/classifier uses ``LITELLM_NARRATOR_MODEL`` and the viewer
 # lobe labeller uses ``LITELLM_LABEL_MODEL`` so the three call sites can
 # be repointed independently at an alternate LiteLLM proxy.
-DEFAULT_QWEN_MODEL = os.environ.get("LITELLM_QWEN_MODEL", "openai/qwen-local")
+DEFAULT_QWEN_MODEL = os.environ.get("LITELLM_QWEN_MODEL", "")
 DEFAULT_QWEN_API_BASE = os.environ.get(
     "LITELLM_BASE_URL", "http://10.20.30.177:8033/v1"
 )
@@ -136,6 +136,11 @@ def make_default_model_call(
 
     if model is None:
         model = DEFAULT_QWEN_MODEL
+    if not model:
+        raise ValueError(
+            "Stage B model is not configured; set LITELLM_QWEN_MODEL "
+            "or pass model explicitly"
+        )
     if api_base is None:
         api_base = DEFAULT_QWEN_API_BASE
     if api_key is None:

@@ -880,7 +880,11 @@ def create_app(paths: Paths | None = None) -> FastAPI:
             # Kick off bucket cache fill; drain progress updates to the client
             # as it runs so the UI shows "3/24 buckets ready…".
             fill_task = asyncio.create_task(
-                narrative_mod.ensure_bucket_cache(slots, progress_cb=progress_cb)
+                narrative_mod.ensure_bucket_cache(
+                    slots,
+                    backend=request.app.state.model_config.viewer,
+                    progress_cb=progress_cb,
+                )
             )
             try:
                 while not fill_task.done():
@@ -907,7 +911,10 @@ def create_app(paths: Paths | None = None) -> FastAPI:
             # Merge step — streamed.
             merge_prompt = narrative_mod.render_merge_prompt(summaries, window_label)
             full_text: list[str] = []
-            async for ev in narrative_mod.stream_narrative(merge_prompt):
+            async for ev in narrative_mod.stream_narrative(
+                merge_prompt,
+                backend=request.app.state.model_config.viewer,
+            ):
                 if await request.is_disconnected():
                     return
                 if ev["type"] == "chunk":

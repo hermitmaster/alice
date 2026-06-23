@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 # clock is inside quiet hours. CLI / A2A never queue (interactive
 # turns, the user / agent is waiting). Signal and Discord queue
 # when no bypass is in effect.
-_QUEUEABLE_TRANSPORTS = frozenset({"signal", "discord"})
+_QUEUEABLE_TRANSPORTS = frozenset({"signal", "discord", "gmail"})
 
 
 class OutboxRouter:
@@ -116,7 +116,13 @@ class OutboxRouter:
             self._queue_for_quiet_hours(channel, text, turn_id=turn_id)
             return
 
-        if attachments and channel.transport != "signal":
+        caps = getattr(transport, "caps", None)
+        supports_files = getattr(
+            caps,
+            "files_outbound",
+            channel.transport == "signal",
+        )
+        if attachments and not supports_files:
             log.warning(
                 "ignoring %d attachment(s) for %s reply; transport "
                 "doesn't support outbound files yet",

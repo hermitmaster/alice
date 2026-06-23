@@ -34,7 +34,7 @@ DEFAULT_CLI_SOCKET = pathlib.Path("/tmp/alice.sock")
 # Fallback speaking-hemisphere config, applied when alice.config.json is absent
 # or omits fields. Matches the defaults in HEMISPHERES.md.
 SPEAKING_DEFAULTS: dict[str, Any] = {
-    "model": "claude-opus-4-7",
+    "model": "",
     "always_thinking": True,
     "working_context_token_budget": 2000,
     "rate_limit_policy": {
@@ -101,7 +101,7 @@ SPEAKING_DEFAULTS: dict[str, Any] = {
         # swap path.
         "reranker": {
             "enabled": False,
-            "model": "claude-haiku-4-5-20251001",
+            "model": "",
             # Default to the in-container LiteLLM proxy when present so
             # flipping `enabled: True` works without an explicit endpoint
             # override. Empty string preserves the legacy default for
@@ -174,6 +174,17 @@ class Config:
     # the daemon skips construction; existing deploys without Discord
     # configured keep working.
     discord_bot_token: str = ""
+
+    # Gmail transport — optional. Uses an app password for both IMAP and
+    # SMTP. Empty address or password disables the transport.
+    gmail_address: str = ""
+    gmail_app_password: str = ""
+    gmail_imap_host: str = "imap.gmail.com"
+    gmail_imap_port: int = 993
+    gmail_smtp_host: str = "smtp.gmail.com"
+    gmail_smtp_port: int = 465
+    gmail_mailbox: str = "INBOX"
+    gmail_poll_seconds: float = 30.0
 
     # API-key auth mode. When ``anthropic_base_url`` or ``anthropic_api_key``
     # is set, core.auth picks "api" mode and routes the CLI through
@@ -325,6 +336,31 @@ def load() -> Config:
     )
 
     discord_bot_token = (from_any("DISCORD_BOT_TOKEN", "") or "").strip()
+    gmail_address = (from_any("GMAIL_ADDRESS", "") or "").strip().lower()
+    gmail_app_password = (from_any("GMAIL_APP_PASSWORD", "") or "").replace(
+        " ", ""
+    ).strip()
+    gmail_imap_host = (
+        from_any("GMAIL_IMAP_HOST", "imap.gmail.com") or "imap.gmail.com"
+    ).strip()
+    gmail_smtp_host = (
+        from_any("GMAIL_SMTP_HOST", "smtp.gmail.com") or "smtp.gmail.com"
+    ).strip()
+    gmail_mailbox = (from_any("GMAIL_MAILBOX", "INBOX") or "INBOX").strip()
+    try:
+        gmail_imap_port = int(from_any("GMAIL_IMAP_PORT", "993") or "993")
+    except ValueError:
+        gmail_imap_port = 993
+    try:
+        gmail_smtp_port = int(from_any("GMAIL_SMTP_PORT", "465") or "465")
+    except ValueError:
+        gmail_smtp_port = 465
+    try:
+        gmail_poll_seconds = float(
+            from_any("GMAIL_POLL_SECONDS", "30") or "30"
+        )
+    except ValueError:
+        gmail_poll_seconds = 30.0
 
     viewer_chat_enabled_raw = (
         from_any("ALICE_VIEWER_CHAT_ENABLED", "1") or "1"
@@ -417,6 +453,14 @@ def load() -> Config:
         cli_enabled=cli_enabled,
         cli_socket_path=cli_socket_path,
         discord_bot_token=discord_bot_token,
+        gmail_address=gmail_address,
+        gmail_app_password=gmail_app_password,
+        gmail_imap_host=gmail_imap_host,
+        gmail_imap_port=gmail_imap_port,
+        gmail_smtp_host=gmail_smtp_host,
+        gmail_smtp_port=gmail_smtp_port,
+        gmail_mailbox=gmail_mailbox,
+        gmail_poll_seconds=gmail_poll_seconds,
         viewer_chat_enabled=viewer_chat_enabled,
         viewer_chat_host=viewer_chat_host,
         viewer_chat_port=viewer_chat_port,

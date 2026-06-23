@@ -374,6 +374,8 @@ def _normalize_address(transport: str, address: str) -> str:
     """
     if transport == "discord" and ":" not in address:
         return f"user:{address}"
+    if transport == "gmail":
+        return address.strip().lower()
     return address
 
 

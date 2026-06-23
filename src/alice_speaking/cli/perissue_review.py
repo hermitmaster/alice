@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import replace
+import os
 import pathlib
 import re
 import sys
@@ -49,6 +51,22 @@ _REVISE_RE = re.compile(r"^\[SM\]\s+design-revise\s+reason=", re.IGNORECASE)
 # Hard cap on the kernel call. Opus reviews of a typical design note
 # (~1KB) take 15-40s; we leave headroom for retries inside the kernel.
 DEFAULT_MAX_SECONDS = 180
+
+
+def _default_mind() -> pathlib.Path:
+    return pathlib.Path(
+        os.environ.get("ALICE_MIND") or pathlib.Path.home() / "alice-mind"
+    )
+
+
+def _load_backend(*, mind: pathlib.Path, model_override: str):
+    """Load the speaking backend/harness and apply the review model override."""
+    from core.config.model import load as load_model_config
+
+    backend = load_model_config(mind).speaking
+    if model_override:
+        backend = replace(backend, model=model_override)
+    return backend
 
 
 def parse_verdict_line(text: str) -> Optional[str]:
@@ -142,7 +160,7 @@ def _compose_review_prompt(
 async def _drive_kernel_async(
     prompt_text: str,
     *,
-    model: str,
+    backend: object,
     max_seconds: int,
     log: Callable[[str], None],
 ) -> tuple[int, str]:
@@ -152,12 +170,10 @@ async def _drive_kernel_async(
     without the heavy PhaseRunner spec building — the reviewer doesn't
     need tool wiring, just a single Opus text call.
     """
-    from core.config.model import BackendSpec
     from core.events import EventLogger
     from core.kernel import make_kernel
     from core.kernel.types import KernelSpec
 
-    backend = BackendSpec(backend="subscription", model=model)
     emitter = EventLogger(pathlib.Path("/dev/null"))
     kernel = make_kernel(
         backend,
@@ -166,10 +182,10 @@ async def _drive_kernel_async(
         short_cap=4000,
     )
     spec = KernelSpec(
-        system_prompt=None,
+        model=getattr(backend, "model", ""),
+        allowed_tools=[],
         cwd=pathlib.Path.cwd(),
-        max_seconds=max_seconds if max_seconds > 0 else None,
-        tools_allowed=(),  # text in, text out — no Bash, no Edit
+        max_seconds=max_seconds if max_seconds > 0 else 0,
     )
     try:
         result = await kernel.run(prompt_text, spec)
@@ -191,13 +207,13 @@ async def _drive_kernel_async(
 def _default_kernel_runner(
     prompt_text: str,
     *,
-    model: str,
+    backend: object,
     max_seconds: int,
     log: Callable[[str], None],
 ) -> tuple[int, str]:
     return asyncio.run(
         _drive_kernel_async(
-            prompt_text, model=model, max_seconds=max_seconds, log=log
+            prompt_text, backend=backend, max_seconds=max_seconds, log=log
         )
     )
 
@@ -238,7 +254,15 @@ def main(
         default="jcronq/alice",
         help="GitHub repo for the verdict comment (default: jcronq/alice)",
     )
-    parser.add_argument("--model", default="claude-opus-4-7")
+    parser.add_argument(
+        "--mind",
+        default=None,
+        help="alice-mind path for config/model.yml (default: $ALICE_MIND or ~/alice-mind)",
+    )
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("ALICE_SPEAKING_REVIEW_MODEL", ""),
+    )
     parser.add_argument(
         "--max-seconds", type=int, default=DEFAULT_MAX_SECONDS
     )
@@ -248,6 +272,8 @@ def main(
         help="parse + compose prompt; skip kernel + comment posting",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    mind = pathlib.Path(args.mind) if args.mind else _default_mind()
+    backend = _load_backend(mind=mind, model_override=args.model)
 
     spawn_dir = pathlib.Path(args.spawn_dir)
     prompt_path = spawn_dir / "prompt.txt"
@@ -319,9 +345,11 @@ def main(
 
     rc, result_text = kernel_runner(
         review_prompt,
-        model=args.model,
-        max_seconds=args.max_seconds,
-        log=log,
+        **(
+            {"backend": backend, "max_seconds": args.max_seconds, "log": log}
+            if kernel_runner is _default_kernel_runner
+            else {"model": backend.model, "max_seconds": args.max_seconds, "log": log}
+        ),
     )
 
     verdict = parse_verdict_line(result_text)

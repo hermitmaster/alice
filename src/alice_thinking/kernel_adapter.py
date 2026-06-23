@@ -16,6 +16,7 @@ subprocess) without any code change here.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, Optional
 
 from core.kernel import make_kernel
@@ -43,9 +44,8 @@ async def run_wake(
     Returns a process-friendly exit code: 0 on clean, 124 on timeout
     (matches the GNU timeout convention), 1 otherwise.
 
-    ``backend`` defaults to a subscription :class:`BackendSpec` so
-    legacy callers (test fixtures, ad-hoc invocations) keep working
-    without explicit threading.
+    ``backend`` defaults to ``ctx.mind_dir/config/model.yml``'s thinking
+    spec so omitted backends remain configurable.
 
     ``phase`` is the phase-routing label (``"active"``, ``"sleep_b"``,
     ``"quick"``, ...) and is added to ``wake_start`` telemetry so the
@@ -53,13 +53,15 @@ async def run_wake(
     for callers that haven't migrated to phase-aware dispatch yet.
     """
     if backend is None:
-        from core.config.model import BackendSpec
+        from core.config.model import load as load_model_config
 
-        backend = BackendSpec(backend="subscription")
+        backend = load_model_config(ctx.mind_dir).thinking
 
     wake_id = f"wake-{int(time.time())}"
     prompt_text = await mode.build_prompt(ctx)
     spec = mode.kernel_spec(ctx)
+    if not spec.model and getattr(backend, "model", ""):
+        spec = replace(spec, model=getattr(backend, "model"))
     phase_label = phase or mode.name
 
     emitter.emit(

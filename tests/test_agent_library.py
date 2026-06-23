@@ -280,7 +280,7 @@ def test_code_worker_carries_pr_and_no_verify_rules():
 def test_code_worker_build_spec_full_access_keeps_edit_and_bash():
     spec = default_registry.get("code-worker")
     built = spec.build_spec()
-    assert built.model == "claude-opus-4-7"
+    assert built.model == ""
     assert "Bash" in built.allowed_tools
     assert "Edit" in built.allowed_tools
     assert "Write" in built.allowed_tools
@@ -318,9 +318,9 @@ def test_research_writer_prompt_names_vault_path():
     assert "~/alice-mind/cortex-memory/research/" in prompt
 
 
-def test_reviewer_uses_sonnet_model():
+def test_reviewer_model_is_configured_externally():
     spec = default_registry.get("reviewer")
-    assert spec.kernel_spec.model == "claude-sonnet-4-6"
+    assert spec.kernel_spec.model == ""
 
 
 def test_reviewer_build_spec_strips_edit_and_write():

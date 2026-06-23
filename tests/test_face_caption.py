@@ -189,13 +189,15 @@ def test_summarize_via_qwen_posts_to_litellm_with_model_and_auth() -> None:
     )
     client = _FakeClient(response)
     out = _summarize_via_qwen(
-        "thinking about cozyhem timer drift", client=client
+        "thinking about cozyhem timer drift",
+        model="test-caption-model",
+        client=client,
     )
     assert out == "reviewing cozyhem"
     assert len(client.calls) == 1
     call = client.calls[0]
     assert call["url"] == "http://alice-litellm:4000/v1/chat/completions"
-    assert call["json"]["model"] == "qwen-local"
+    assert call["json"]["model"] == "test-caption-model"
     assert call["json"]["messages"][0]["role"] == "system"
     assert call["json"]["messages"][1]["role"] == "user"
     assert call["json"]["messages"][1]["content"] == (
@@ -229,7 +231,9 @@ def test_summarize_via_qwen_honors_overrides() -> None:
 def test_summarize_via_qwen_returns_none_on_http_error() -> None:
     response = _FakeResponse(503, {"error": "backend down"})
     client = _FakeClient(response)
-    assert _summarize_via_qwen("anything", client=client) is None
+    assert _summarize_via_qwen(
+        "anything", model="test-caption-model", client=client
+    ) is None
 
 
 def test_summarize_via_qwen_returns_none_on_empty_content() -> None:
@@ -237,7 +241,9 @@ def test_summarize_via_qwen_returns_none_on_empty_content() -> None:
         200, {"choices": [{"message": {"content": "   "}}]}
     )
     client = _FakeClient(response)
-    assert _summarize_via_qwen("anything", client=client) is None
+    assert _summarize_via_qwen(
+        "anything", model="test-caption-model", client=client
+    ) is None
 
 
 def test_summarize_via_qwen_truncates_long_output() -> None:
@@ -250,6 +256,6 @@ def test_summarize_via_qwen_truncates_long_output() -> None:
         },
     )
     client = _FakeClient(response)
-    out = _summarize_via_qwen("anything", client=client)
+    out = _summarize_via_qwen("anything", model="test-caption-model", client=client)
     assert out is not None
     assert len(out) <= MAX_CAPTION_CHARS

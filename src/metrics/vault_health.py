@@ -1775,6 +1775,10 @@ def compute_recovery_state(
 
     **Burst detection:** If ``research_notes_last_night`` > 20 for
     2+ consecutive days in the events log, status is ``active_burst``.
+    Events are deduplicated by date (one event per day counts). If
+    14+ consecutive burst days are found, the window is capped at 14
+    and the function falls through to recovery-state computation
+    instead of returning ``active_burst``.
 
     Default when no burst is active and no window data available:
     ``{"status": "baseline", "window": "N/A"}``.
@@ -1792,16 +1796,29 @@ def compute_recovery_state(
         events = _read_events_jsonl(events_path)
         last_night_counts: list[int] = []
         last_night_dates: list[str] = []
+        seen_dates: set[str] = set()
         for evt in reversed(events):
             if evt.get("type") != "vault_health":
                 continue
             rnl = evt.get("research_notes_last_night", 0)
             if isinstance(rnl, (int, float)) and rnl > 20:
+                date = evt.get("date") or evt.get("ts", "")[:10]
+                if date in seen_dates:
+                    continue  # skip duplicate event for same day
+                seen_dates.add(date)
                 last_night_counts.append(int(rnl))
-                last_night_dates.append(evt.get("date") or evt.get("ts", "")[:10])
+                last_night_dates.append(date)
             elif len(last_night_counts) > 0:
-                break  # once we hit a non-burst, stop looking back
-        if len(last_night_counts) >= 2:
+                date = evt.get("date") or evt.get("ts", "")[:10]
+                if date not in seen_dates:
+                    break  # new date, not a burst day — streak ends
+                # else: non-burst event for a date already counted as burst; skip
+        if len(last_night_dates) >= 14:
+            # 14-day window cap reached — fall through to recovery computation.
+            # last_night_dates is newest-first; cap keeps the 14 most recent.
+            last_night_dates = last_night_dates[-14:]
+            last_night_counts = last_night_counts[-14:]
+        elif len(last_night_counts) >= 2:
             # last_night_dates is newest-first (we iterate reversed events),
             # so the oldest streak day — the burst start — is the last entry.
             return {
@@ -1811,7 +1828,7 @@ def compute_recovery_state(
                 "structural_debt_delta": None,
                 "estimated_recovery_tier": "R0",
                 "burst_start_date": last_night_dates[-1] if last_night_dates else None,
-                "day_in_window": len(last_night_counts),
+                "day_in_window": len(last_night_dates),
             }
 
     # --- Compute three signals ---

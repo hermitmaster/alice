@@ -85,7 +85,7 @@ DEFAULT_ENDPOINT = os.environ.get(
 # call sites shared a single knob, which meant repointing
 # ``LITELLM_BASE_URL`` at an alternate LiteLLM proxy forced both onto
 # the same backend or 404'd one of them.
-DEFAULT_MODEL = os.environ.get("LITELLM_NARRATOR_MODEL", "qwen-desktop")
+DEFAULT_MODEL = os.environ.get("LITELLM_NARRATOR_MODEL", "")
 
 # Bearer token for the LiteLLM proxy (its master key). Empty in dev/tests
 # and against the direct LAN fallback (unauthenticated) — the
@@ -175,13 +175,20 @@ class LLMClient:
         api_key: str = DEFAULT_API_KEY,
         temperature: float = DEFAULT_TEMPERATURE,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        max_tokens: int | None = None,
         http_client_factory=None,
     ) -> None:
+        if not model:
+            raise ValueError(
+                "LLMClient model is not configured; set LITELLM_NARRATOR_MODEL "
+                "or pass model explicitly"
+            )
         self._endpoint = endpoint.rstrip("/")
         self._model = model
         self._api_key = api_key
         self._temperature = temperature
         self._timeout_seconds = timeout_seconds
+        self._max_tokens = max_tokens
         self._http_client_factory = http_client_factory or (
             lambda: httpx.AsyncClient(timeout=timeout_seconds)
         )
@@ -201,7 +208,7 @@ class LLMClient:
         blob = await self._post_chat(prompt)
         return self._parse_response(blob)
 
-    async def complete(self, prompt: str) -> dict:
+    async def complete(self, prompt: str, *, system_prompt: str = "") -> dict:
         """Send a raw user prompt; return the assistant's parsed JSON
         object verbatim. Used by call sites whose output schema differs
         from the urgency/intent template (Phase 2 motion-cortex pipeline,
@@ -211,7 +218,7 @@ class LLMClient:
         when the assistant's content is not valid JSON. Does NOT enforce
         a top-level key shape — that's the caller's job.
         """
-        blob = await self._post_chat(prompt)
+        blob = await self._post_chat(prompt, system_prompt=system_prompt)
         try:
             content = blob["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -230,29 +237,30 @@ class LLMClient:
             )
         return parsed
 
-    async def _post_chat(self, prompt: str) -> dict:
+    async def complete_text(self, prompt: str, *, system_prompt: str = "") -> str:
+        """Send a raw user prompt; return assistant text content.
+
+        Use this for small utility calls whose output is deliberately
+        plain text rather than JSON. It shares the same configured
+        OpenAI-compatible endpoint/model/auth seam as :meth:`complete`.
+        """
+        blob = await self._post_chat(prompt, system_prompt=system_prompt)
+        try:
+            return str(blob["choices"][0]["message"]["content"] or "")
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMUnreachable(
+                f"llm response missing choices[0].message.content: {exc}"
+            ) from exc
+
+    async def _post_chat(self, prompt: str, *, system_prompt: str = "") -> dict:
         """Low-level POST against the OpenAI-compatible chat endpoint.
 
         Shared between :meth:`classify` and :meth:`complete` so the
         network wiring (auth header, thinking-off flag, exception
         funnel) only lives in one place. Returns the raw response JSON.
         """
-        body = {
-            "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": self._temperature,
-            "stream": False,
-            # The Qwen3.6 builds are reasoning models: with thinking on
-            # they spend the token budget on ``reasoning_content`` and
-            # return ``content=""`` — which would make :meth:`_parse_response`
-            # see no JSON. Classification is a closed-form task, so turn
-            # thinking off (same fix viewer.lobe_labeler uses). LiteLLM's
-            # ``drop_params: true`` strips this safely if a backend ignores it.
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-        headers = (
-            {"Authorization": f"Bearer {self._api_key}"} if self._api_key else None
-        )
+        body = self._chat_body(prompt, system_prompt=system_prompt)
+        headers = self._auth_headers()
         try:
             client_cm = self._http_client_factory()
             async with client_cm as client:
@@ -267,6 +275,85 @@ class LLMClient:
             raise LLMUnreachable(
                 f"llm endpoint {self._endpoint} unreachable or errored: {exc}"
             ) from exc
+
+    def complete_text_sync(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str = "",
+        client: Any = None,
+    ) -> str:
+        """Synchronous text completion for sync workers.
+
+        ``client`` may be an ``httpx.Client``-compatible test double. If
+        omitted, a short-lived ``httpx.Client`` is constructed and closed.
+        """
+        blob = self._post_chat_sync(prompt, system_prompt=system_prompt, client=client)
+        try:
+            return str(blob["choices"][0]["message"]["content"] or "")
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMUnreachable(
+                f"llm response missing choices[0].message.content: {exc}"
+            ) from exc
+
+    def _post_chat_sync(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str = "",
+        client: Any = None,
+    ) -> dict:
+        body = self._chat_body(prompt, system_prompt=system_prompt)
+        headers = self._auth_headers()
+        owns_client = client is None
+        try:
+            client = client or httpx.Client(timeout=self._timeout_seconds)
+            resp = client.post(
+                f"{self._endpoint}/chat/completions",
+                json=body,
+                headers=headers,
+            )
+            if hasattr(resp, "raise_for_status"):
+                resp.raise_for_status()
+            elif getattr(resp, "status_code", 200) >= 400:
+                raise LLMUnreachable(
+                    f"llm endpoint {self._endpoint} returned "
+                    f"{getattr(resp, 'status_code', '?')}: "
+                    f"{getattr(resp, 'text', '')[:200]}"
+                )
+            return resp.json()
+        except (httpx.HTTPError, json.JSONDecodeError, OSError) as exc:
+            raise LLMUnreachable(
+                f"llm endpoint {self._endpoint} unreachable or errored: {exc}"
+            ) from exc
+        finally:
+            if owns_client and client is not None:
+                client.close()
+
+    def _chat_body(self, prompt: str, *, system_prompt: str = "") -> dict:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        body = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": self._temperature,
+            "stream": False,
+            # The Qwen3.6 builds are reasoning models: with thinking on
+            # they spend the token budget on ``reasoning_content`` and
+            # return ``content=""`` — which would make :meth:`_parse_response`
+            # see no JSON. Classification is a closed-form task, so turn
+            # thinking off (same fix viewer.lobe_labeler uses). LiteLLM's
+            # ``drop_params: true`` strips this safely if a backend ignores it.
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        if self._max_tokens is not None:
+            body["max_tokens"] = self._max_tokens
+        return body
+
+    def _auth_headers(self) -> dict | None:
+        return {"authorization": f"Bearer {self._api_key}"} if self._api_key else None
 
     def _build_prompt(self, event: Any, context: dict) -> str:
         """Render the qwen-prompt template from the design note.

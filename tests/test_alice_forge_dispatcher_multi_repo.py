@@ -23,6 +23,7 @@ from alice_forge.dispatcher.constants import (
     DEFAULT_REPO,
     WORKER_REPO_PATH,
     load_dispatcher_repos,
+    load_spawn_map,
 )
 
 
@@ -207,6 +208,82 @@ def test_load_dispatcher_repos_all_malformed_returns_fallback(
     )
     repos = load_dispatcher_repos(config_path=cfg, log=lambda _msg: None)
     assert repos[0].slug == DEFAULT_REPO
+
+
+# ---------------------------------------------------------------------------
+# load_spawn_map — config parsing
+# ---------------------------------------------------------------------------
+
+
+def test_load_spawn_map_missing_file_returns_default(
+    tmp_path: pathlib.Path,
+) -> None:
+    missing = tmp_path / "missing.json"
+    spawn_map = load_spawn_map(config_path=missing, log=lambda _msg: None)
+    assert spawn_map[("sm:selected", "art:code")]["agent_spec"] == "designer"
+    assert spawn_map[("sm:reviewing", "art:code")]["agent_spec"] == "reviewer"
+
+
+def test_load_spawn_map_parses_full_config(tmp_path: pathlib.Path) -> None:
+    cfg = tmp_path / "alice.config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "sm_dispatcher": {
+                    "spawn_map": [
+                        {
+                            "sm_state": "sm:selected",
+                            "art_label": "art:code",
+                            "persona": "thinking",
+                            "runtime": "claude-agent-sdk",
+                            "phase": "per_issue_design",
+                            "agent_spec": "designer",
+                        },
+                        {
+                            "sm_state": "sm:reviewing",
+                            "art_label": "art:code",
+                            "persona": "reviewer",
+                            "runtime": "claude-agent-sdk",
+                            "agent_spec": "reviewer",
+                            "system_prompt_module": (
+                                "alice_speaking.review.code_reviewer:CODE_REVIEWER_SYSTEM_PROMPT"
+                            ),
+                        },
+                    ]
+                }
+            }
+        )
+    )
+    spawn_map = load_spawn_map(config_path=cfg, log=lambda _msg: None)
+    assert spawn_map[("sm:selected", "art:code")]["agent_spec"] == "designer"
+    assert spawn_map[("sm:reviewing", "art:code")]["system_prompt_module"].endswith(
+        "CODE_REVIEWER_SYSTEM_PROMPT"
+    )
+
+
+def test_load_spawn_map_merges_over_defaults(tmp_path: pathlib.Path) -> None:
+    cfg = tmp_path / "alice.config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "sm_dispatcher": {
+                    "spawn_map": [
+                        {
+                            "sm_state": "sm:selected",
+                            "art_label": "art:code",
+                            "persona": "thinking",
+                            "runtime": "claude-agent-sdk",
+                            "phase": "per_issue_design",
+                            "agent_spec": "designer",
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    spawn_map = load_spawn_map(config_path=cfg, log=lambda _msg: None)
+    assert spawn_map[("sm:selected", "art:code")]["agent_spec"] == "designer"
+    assert spawn_map[("sm:reviewing", "art:code")]["agent_spec"] == "reviewer"
 
 
 # ---------------------------------------------------------------------------

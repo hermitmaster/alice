@@ -25,6 +25,7 @@ from .base import (
     Transport,
 )
 from .cli import CLITransport
+from .gmail import GmailTransport
 from .registry import SourceRegistry
 from .signal import SignalTransport
 from .viewer_chat import ViewerChatTransport
@@ -44,6 +45,7 @@ __all__ = [
     "CLITransport",
     "DaemonContext",
     "Event",
+    "GmailTransport",
     "InboundMessage",
     "OutboundMessage",
     "Principal",

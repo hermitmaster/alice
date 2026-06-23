@@ -54,6 +54,8 @@ Source-of-truth for the registered specs (post-Phase 4 of #194, #321):
 
 from __future__ import annotations
 
+import os
+
 from ..kernel import KernelSpec
 from . import policies
 from .registry import default_registry
@@ -63,16 +65,15 @@ from .types import AgentSpec, BehavioralRule, OutputSchema
 __all__ = ["register_builtins"]
 
 
-# Default model for both hemispheres — matches today's
-# alice.config.json fallback (the real config can still override at
-# call time by passing a different KernelSpec into :func:`run_agent`).
-_DEFAULT_MODEL = "claude-opus-4-7"
+# Default model for both hemispheres. Configure with
+# ``ALICE_AGENT_DEFAULT_MODEL``; callers can still override at call time
+# by passing a different KernelSpec into :func:`run_agent`.
+_DEFAULT_MODEL = os.environ.get("ALICE_AGENT_DEFAULT_MODEL", "")
 
-# Reviewer runs on Sonnet (cheaper / faster than Opus, sufficient for
-# structured-output verdicts). Mirrors
+# Reviewer model. Configure with ``ALICE_AGENT_REVIEWER_MODEL``. Mirrors
 # :data:`alice_thinking.design_pipeline.DEFAULT_REVIEWER_MODEL` and the
-# ``claude-agent-sdk:sonnet`` runtime label in the dispatcher SPAWN_MAP.
-_REVIEWER_MODEL = "claude-sonnet-4-6"
+# reviewer runtime label in the dispatcher SPAWN_MAP.
+_REVIEWER_MODEL = os.environ.get("ALICE_AGENT_REVIEWER_MODEL", "")
 
 
 _THINKING_RULES = (

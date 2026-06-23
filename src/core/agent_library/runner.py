@@ -21,6 +21,9 @@ in during Phase 2+.
 
 from __future__ import annotations
 
+import os
+import pathlib
+from dataclasses import replace
 from typing import TYPE_CHECKING, Optional
 
 from ..kernel import KernelResult, make_kernel
@@ -32,6 +35,24 @@ if TYPE_CHECKING:
 
 
 __all__ = ["run_agent"]
+
+
+def _default_backend_for_agent(agent: AgentSpec) -> object:
+    """Resolve a configured backend for legacy callers that omit one."""
+    from ..config.model import load as load_model_config
+
+    mind = pathlib.Path(
+        os.environ.get("ALICE_MIND") or pathlib.Path.home() / "alice-mind"
+    )
+    cfg = load_model_config(mind)
+    if agent.persona == "thinking" or agent.name in {
+        "designer",
+        "research-writer",
+    }:
+        return cfg.thinking
+    if agent.persona == "cozylobe":
+        return cfg.viewer
+    return cfg.speaking
 
 
 async def run_agent(
@@ -51,8 +72,9 @@ async def run_agent(
        merges behavioral rules into ``append_system_prompt``,
        producing the effective :class:`KernelSpec`.
     2. :func:`core.kernel.make_kernel` picks the backend impl from
-       ``backend`` (defaults to subscription Anthropic so legacy
-       callers without an explicit backend keep working).
+       ``backend``. If omitted, the runner resolves a hemisphere
+       backend from ``mind/config/model.yml`` based on the agent
+       persona.
     3. ``await kernel.run(prompt, spec)`` runs the turn and returns
        the :class:`KernelResult`.
 
@@ -74,7 +96,7 @@ async def run_agent(
 
         spec = default_registry.get("reviewer")
         # Bump the model + per-turn time cap for this dispatch only.
-        kernel = replace(spec.kernel_spec, model="claude-opus-4-7", max_seconds=120)
+        kernel = replace(spec.kernel_spec, model=os.environ["ALICE_AGENT_MODEL"], max_seconds=120)
         agent = replace(spec, kernel_spec=kernel)
         result = await run_agent(agent, prompt="...", emitter=emitter)
 
@@ -90,14 +112,9 @@ async def run_agent(
     spec = agent.build_spec()
 
     if backend is None:
-        # Defer the import — :mod:`core.config.model` is part of
-        # ``core`` so the AST isolation guard is happy, but the
-        # lazy import keeps :mod:`core.agent_library.runner`
-        # importable even when no backend config exists yet
-        # (e.g., very early-boot tests).
-        from ..config.model import BackendSpec
-
-        backend = BackendSpec(backend="subscription")
+        backend = _default_backend_for_agent(agent)
+    if not spec.model and getattr(backend, "model", ""):
+        spec = replace(spec, model=getattr(backend, "model"))
 
     kernel = make_kernel(backend, emitter, correlation_id=correlation_id)
     return await kernel.run(prompt, spec)

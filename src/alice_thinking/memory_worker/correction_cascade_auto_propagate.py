@@ -135,6 +135,10 @@ def _write_propagation_event(
     Called at the end of :func:`auto_propagate` to log the run. The write
     is non-fatal: the propagation has already happened, so a failed event
     write is logged and swallowed rather than raised.
+
+    Severity counts reflect what was *actually propagated* (not what was
+    detected). Low-severity entries are filtered out before propagation
+    and do not appear in the propagated count.
     """
     now = datetime.now(_EDT)
     event = {
@@ -162,13 +166,23 @@ def _write_propagation_event(
         )
 
 
-def _already_references(md: pathlib.Path, correction_slug: str) -> bool:
+def _already_references(
+    md: pathlib.Path, correction_slug: str, correction_stem: str | None = None
+) -> bool:
     """Check if the note body already contains a wikilink to *correction_slug*.
 
-    Idempotency guard: if the link is already present, skip.
+    Idempotency guard: if the link is already present by either the
+    frontmatter slug or the filename stem form, skip. This mirrors the
+    dual-form resolution in ``correction_cascade.detect_corrections``
+    so that notes referencing a correction by stem are not falsely
+    flagged as unpropagated.
     """
     _, body = _frontmatter_read(md)
-    return f"[[{correction_slug}" in body
+    if f"[[{correction_slug}" in body:
+        return True
+    if correction_stem and correction_stem != correction_slug:
+        return f"[[{correction_stem}" in body
+    return False
 
 
 def _write_updated_frontmatter(fm: dict, body: str) -> str:
@@ -191,7 +205,9 @@ def _add_backlink(
     md: pathlib.Path,
     correction_slug: str,
     correction_title: str,
+    correction_stem: str | None = None,
     *,
+    severity: str = "high",
     dry_run: bool = _DRY_RUN,
 ) -> bool:
     """Append a correction wikilink to the note's backlinks section.
@@ -201,30 +217,39 @@ def _add_backlink(
 
     In dry-run mode the note is NOT written; the return value indicates
     what *would* change.
+
+    Dual-form resolution: checks both the frontmatter slug and the
+    filename stem form to avoid adding a duplicate wikilink when a
+    note references the correction by the stem form.
+
+    Severity markers: medium-severity corrections receive a ``[medium]``
+    tag after the wikilink so the reader knows the correction is
+    qualitative rather than quantitative. High-severity corrections
+    have no marker (they are quantitative and unambiguous).
     """
     text = md.read_text(encoding="utf-8")
     fm, body = split_frontmatter(text)
 
-    # Idempotency: already has the link?
+    # Idempotency: already has the link (slug or stem form)?
     if f"[[{correction_slug}" in body:
         return False
+    if correction_stem and correction_stem != correction_slug:
+        if f"[[{correction_stem}" in body:
+            return False
+
+    # Build the backlink line, with optional severity marker.
+    severity_tag = f" [{severity}]" if severity == "medium" else ""
+    backlink_line = f"- [[{correction_slug}|{correction_title}]]{severity_tag}\n"
 
     # Try to find the Backlinks section
     backlinks_match = re.search(r"^(## Backlinks\s*\n)", text, re.MULTILINE)
     if backlinks_match:
         # Append to existing Backlinks section
         pos = backlinks_match.end()
-        new_text = (
-            text[:pos]
-            + f"- [[{correction_slug}|{correction_title}]]\n"
-            + text[pos:]
-        )
+        new_text = text[:pos] + backlink_line + text[pos:]
     else:
         # No Backlinks section — create one
-        new_backlinks = (
-            f"\n## Backlinks\n\n"
-            f"- [[{correction_slug}|{correction_title}]]\n"
-        )
+        new_backlinks = f"\n## Backlinks\n\n{backlink_line}"
         changelog_match = re.search(
             r"^(## Changelog\s*\n.*?)(?=\n##|\Z)", text, re.MULTILINE | re.DOTALL
         )
@@ -349,14 +374,22 @@ def auto_propagate(
     total_added = 0
     skipped = 0
     corrected_by_updates = 0
+    propagated_high = 0
+    propagated_medium = 0
 
-    # Group by referencing note
-    by_ref: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    # Group by referencing note. Only propagate high and medium severity;
+    # low-severity corrections are not auto-propagated (design spec:
+    # low = nuance added, edge-case corrections may not apply to all
+    # referencing notes — let Speaking decide case-by-case).
+    by_ref: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
     # Track which corrected notes we need to update corrected_by for
     corrected_targets: dict[str, str] = {}  # corrected_slug -> correction_slug
     for u in report.unpropagated:
+        if u.severity == "low":
+            skipped += 1
+            continue
         by_ref[u.referencing_slug].append(
-            (u.correction_slug, u.correction_title, u.corrected_slug)
+            (u.correction_slug, u.correction_title, u.corrected_slug, u.severity)
         )
         corrected_targets[u.corrected_slug] = u.correction_slug
 
@@ -382,11 +415,28 @@ def auto_propagate(
             continue
 
         added = 0
-        for corr_slug, corr_title, _corrected_slug in corrections:
-            if _already_references(ref_md, corr_slug):
+        for corr_slug, corr_title, _corrected_slug, corr_severity in corrections:
+            # Resolve the correction note to get its filename stem,
+            # matching the dual-form pattern from detect_corrections.
+            corr_md = _try_resolve_slug(corr_slug, vault)
+            if corr_md is None:
+                corr_md = _resolve_slug_by_frontmatter(corr_slug, vault)
+            corr_stem: str | None = None
+            if corr_md is not None:
+                stem = corr_md.stem
+                if stem != corr_slug:
+                    corr_stem = stem
+            if _already_references(ref_md, corr_slug, corr_stem):
                 continue
-            if _add_backlink(ref_md, corr_slug, corr_title, dry_run=_DRY_RUN):
+            if _add_backlink(
+                ref_md, corr_slug, corr_title, corr_stem,
+                severity=corr_severity, dry_run=_DRY_RUN,
+            ):
                 added += 1
+                if corr_severity == "high":
+                    propagated_high += 1
+                else:
+                    propagated_medium += 1
 
         if added > 0:
             changes[ref_slug] = added
@@ -408,7 +458,7 @@ def auto_propagate(
 
     logger.info(
         "auto-propagate: added %d correction links to %d notes, "
-        "updated corrected_by: on %d notes, skipped %d",
+        "updated corrected_by: on %d notes, skipped %d (low-severity)",
         total_added,
         len(changes),
         corrected_by_updates,
@@ -421,9 +471,9 @@ def auto_propagate(
         pairs_affected=len(changes),
         mode="dry-run" if _DRY_RUN else "production",
         duration_seconds=wall_elapsed,
-        high_severity=report.high_count,
-        medium_severity=report.medium_count,
-        low_severity=report.low_count,
+        high_severity=propagated_high,
+        medium_severity=propagated_medium,
+        low_severity=skipped,
     )
 
     return changes

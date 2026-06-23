@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import replace
+import os
 import pathlib
 import re
 import subprocess
@@ -169,10 +171,27 @@ def _default_cwd() -> pathlib.Path:
     return pathlib.Path.cwd()
 
 
+def _default_mind() -> pathlib.Path:
+    return pathlib.Path(
+        os.environ.get("ALICE_MIND") or pathlib.Path.home() / "alice-mind"
+    )
+
+
+def _load_backend(*, mind: pathlib.Path, model_override: str):
+    """Load the speaking backend/harness and apply an optional model override."""
+    from core.config.model import load as load_model_config
+
+    backend = load_model_config(mind).speaking
+    if model_override:
+        backend = replace(backend, model=model_override)
+    return backend
+
+
 async def _drive_kernel_async(
     prompt_text: str,
     spec: Any,
     *,
+    backend: Any,
     log: Callable[[str], None],
 ) -> tuple[int, str]:
     """Run the kernel, return ``(exit_code, result_text)``.
@@ -181,11 +200,9 @@ async def _drive_kernel_async(
     124 on kernel-reported timeout, 1 otherwise. The caller parses
     ``result_text`` for the PR URL.
     """
-    from core.config.model import BackendSpec
     from core.events import EventLogger
     from core.kernel import make_kernel
 
-    backend = BackendSpec(backend="subscription")
     emitter = EventLogger(pathlib.Path("/dev/null"))
     kernel = make_kernel(
         backend,
@@ -211,9 +228,10 @@ def _default_kernel_runner(
     prompt_text: str,
     spec: Any,
     *,
+    backend: Any,
     log: Callable[[str], None],
 ) -> tuple[int, str]:
-    return asyncio.run(_drive_kernel_async(prompt_text, spec, log=log))
+    return asyncio.run(_drive_kernel_async(prompt_text, spec, backend=backend, log=log))
 
 
 def main(
@@ -277,9 +295,17 @@ def main(
         help="kernel cwd (default: ~/alice if it exists, else current dir)",
     )
     parser.add_argument(
+        "--mind",
+        default=None,
+        help="alice-mind path for config/model.yml (default: $ALICE_MIND or ~/alice-mind)",
+    )
+    parser.add_argument(
         "--model",
-        default="claude-opus-4-7",
-        help="model id passed to the kernel (default: claude-opus-4-7)",
+        default=os.environ.get("ALICE_SPEAKING_PERISSUE_MODEL", ""),
+        help=(
+            "model id passed to the kernel "
+            "(default: ALICE_SPEAKING_PERISSUE_MODEL)"
+        ),
     )
     parser.add_argument(
         "--max-seconds",
@@ -293,6 +319,8 @@ def main(
         help="resolve phase + compose prompt; skip kernel + comment posting",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    mind = pathlib.Path(args.mind) if args.mind else _default_mind()
+    backend = _load_backend(mind=mind, model_override=args.model)
 
     spawn_dir = pathlib.Path(args.spawn_dir)
     prompt_path = spawn_dir / "prompt.txt"
@@ -369,7 +397,7 @@ def main(
     prompt_text, spec = runner.run(
         phase,
         inputs,
-        model=args.model,
+        model=backend.model,
         cwd=cwd,
         max_seconds=args.max_seconds,
     )
@@ -384,7 +412,10 @@ def main(
     if args.dry_run:
         return 0
 
-    rc, result_text = kernel_runner(prompt_text, spec, log=log)
+    if kernel_runner is _default_kernel_runner:
+        rc, result_text = kernel_runner(prompt_text, spec, backend=backend, log=log)
+    else:
+        rc, result_text = kernel_runner(prompt_text, spec, log=log)
 
     if rc == 0:
         pr_url = parse_pr_url(result_text)

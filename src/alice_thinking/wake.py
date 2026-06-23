@@ -72,7 +72,7 @@ DEFAULT_STATE_DIR = pathlib.Path("/state/worker")
 # ``--tools=Foo,Bar`` (or setting ``thinking.allowed_tools`` in
 # ``alice.config.json``) still overrides at the WakeContext layer.
 DEFAULT_TOOLS = ""
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = ""
 DEFAULT_MAX_SECONDS = 0  # 0 == no timeout. Thinking runs as long as it needs.
 QUICK_MAX_SECONDS = 30
 INTERVAL_FILE_NAME = "next-thinking-interval-seconds"

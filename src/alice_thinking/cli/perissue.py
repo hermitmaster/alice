@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import replace
+import os
 import pathlib
 import re
 import sys
@@ -160,7 +162,19 @@ def _default_cwd() -> pathlib.Path:
 
 
 def _default_mind() -> pathlib.Path:
-    return pathlib.Path.home() / "alice-mind"
+    return pathlib.Path(
+        os.environ.get("ALICE_MIND") or pathlib.Path.home() / "alice-mind"
+    )
+
+
+def _load_backend(*, mind: pathlib.Path, model_override: str):
+    """Load the thinking backend/harness and apply an optional model override."""
+    from core.config.model import load as load_model_config
+
+    backend = load_model_config(mind).thinking
+    if model_override:
+        backend = replace(backend, model=model_override)
+    return backend
 
 
 def _build_wake_context(
@@ -201,6 +215,7 @@ async def _drive_kernel(
     prompt_text: str,
     spec: Any,
     *,
+    backend: Any,
     log: Callable[[str], None],
 ) -> int:
     """Default kernel-driver: run the spec via :func:`core.kernel.make_kernel`.
@@ -215,11 +230,9 @@ async def _drive_kernel(
     otherwise. Replaceable in tests via the ``kernel_runner`` arg on
     :func:`main`.
     """
-    from core.config.model import BackendSpec
     from core.events import EventLogger
     from core.kernel import make_kernel
 
-    backend = BackendSpec(backend="subscription")
     emitter = EventLogger(pathlib.Path("/dev/null"))
     kernel = make_kernel(
         backend,
@@ -238,14 +251,22 @@ async def _drive_kernel(
     return 0
 
 
+def _default_kernel_runner(
+    prompt_text: str,
+    spec: Any,
+    *,
+    backend: Any,
+    log: Callable[[str], None],
+) -> int:
+    return asyncio.run(_drive_kernel(prompt_text, spec, backend=backend, log=log))
+
+
 def main(
     argv: Optional[Iterable[str]] = None,
     *,
     runner_factory: Callable[[], PhaseRunner] = PhaseRunner,
     context_builder: Callable[..., WakeContext] = _build_wake_context,
-    kernel_runner: Callable[..., int] = lambda prompt_text, spec, *, log: asyncio.run(
-        _drive_kernel(prompt_text, spec, log=log)
-    ),
+    kernel_runner: Callable[..., int] = _default_kernel_runner,
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr),
 ) -> int:
     """Read prompt.txt, resolve phase, dispatch via PhaseRunner, run kernel.
@@ -299,8 +320,11 @@ def main(
     )
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-6",
-        help="model id passed to the kernel (default: claude-sonnet-4-6)",
+        default=os.environ.get("ALICE_THINKING_PERISSUE_MODEL", ""),
+        help=(
+            "model id passed to the kernel "
+            "(default: ALICE_THINKING_PERISSUE_MODEL)"
+        ),
     )
     parser.add_argument(
         "--max-seconds",
@@ -314,6 +338,8 @@ def main(
         help="resolve phase + compose prompt; skip kernel invocation. For tests.",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    mind = pathlib.Path(args.mind) if args.mind else _default_mind()
+    backend = _load_backend(mind=mind, model_override=args.model)
 
     spawn_dir = pathlib.Path(args.spawn_dir)
     prompt_path = spawn_dir / "prompt.txt"
@@ -345,9 +371,9 @@ def main(
     runner = runner_factory()
     ctx = context_builder(
         spawn_dir=spawn_dir,
-        mind=pathlib.Path(args.mind) if args.mind else _default_mind(),
+        mind=mind,
         cwd=pathlib.Path(args.cwd) if args.cwd else _default_cwd(),
-        model=args.model,
+        model=backend.model,
         max_seconds=args.max_seconds,
     )
     prompt_text, spec = runner.run(phase, ctx, injected_content=body)
@@ -360,6 +386,8 @@ def main(
     if args.dry_run:
         return 0
 
+    if kernel_runner is _default_kernel_runner:
+        return kernel_runner(prompt_text, spec, backend=backend, log=log)
     return kernel_runner(prompt_text, spec, log=log)
 
 

@@ -19,6 +19,7 @@ module replaces that with a one-shot Haiku summary call per wake.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 import os
 import pathlib
@@ -26,7 +27,7 @@ import time
 from typing import Any
 
 
-HAIKU_MODEL = "claude-haiku-4-5"
+HAIKU_MODEL = os.environ.get("ALICE_RUN_SUMMARY_MODEL", "")
 
 # Bump when the prompt or output shape changes — cached entries with a
 # lower schema are treated as missing so summaries regenerate lazily.
@@ -52,6 +53,18 @@ def _cache_path(run_id: str) -> pathlib.Path:
     # construction, but be paranoid about path traversal.
     safe = run_id.replace("/", "_").replace("..", "__")
     return cache_dir() / f"{safe}.json"
+
+
+def _viewer_backend():
+    from core.config.model import load as load_model_config
+
+    mind = pathlib.Path(
+        os.environ.get("ALICE_MIND") or pathlib.Path.home() / "alice-mind"
+    )
+    backend = load_model_config(mind).viewer
+    if HAIKU_MODEL:
+        backend = replace(backend, model=HAIKU_MODEL)
+    return backend
 
 
 def read(run_id: str) -> str | None:
@@ -278,19 +291,22 @@ async def _generate(run_id: str, events: list) -> None:
         prompt = _build_prompt(events)
         try:
             from core.config.auth import ensure_auth_env
-            from core.kernel import KernelSpec
             from core.events import CapturingEmitter
-            from kernels.anthropic import AnthropicKernel
+            from core.kernel import KernelSpec, make_kernel
         except ImportError:
             return
         ensure_auth_env()
+        backend = _viewer_backend()
+        if not getattr(backend, "model", ""):
+            return
 
         emitter = CapturingEmitter()
-        kernel = AnthropicKernel(
+        kernel = make_kernel(
+            backend,
             emitter, correlation_id=f"summary-{run_id}", silent=True
         )
         spec = KernelSpec(
-            model=HAIKU_MODEL,
+            model=backend.model,
             allowed_tools=[],
             cwd=pathlib.Path("/tmp"),
         )

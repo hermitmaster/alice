@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from .transports.a2a import A2ATransport
     from .transports.discord import DiscordTransport
+    from .transports.gmail import GmailTransport
 
 from core.config.auth import ensure_auth_env
 from core.kernel import KernelSpec, make_kernel
@@ -104,6 +105,7 @@ from .diagnostics import ContextProbe
 from .transports.a2a import A2AEvent
 from .transports.cli import CLIEvent
 from .transports.discord import DiscordEvent
+from .transports.gmail import GmailEvent
 from .transports.signal import SignalEvent
 from .transports.viewer_chat import ViewerChatEvent
 from .transports.ws import resolve_token as resolve_ws_token
@@ -126,6 +128,7 @@ __all__ = [
     "CLIEvent",
     "DiscordEvent",
     "EmergencyEvent",
+    "GmailEvent",
     "IdleEvent",
     "SignalEvent",
     "SpeakingDaemon",
@@ -342,6 +345,21 @@ class SpeakingDaemon:
 
             self.discord_transport = DiscordTransport(token=cfg.discord_bot_token)
 
+        self.gmail_transport: Optional["GmailTransport"] = None
+        if cfg.gmail_address and cfg.gmail_app_password:
+            from .transports.gmail import GmailTransport
+
+            self.gmail_transport = GmailTransport(
+                address=cfg.gmail_address,
+                app_password=cfg.gmail_app_password,
+                imap_host=cfg.gmail_imap_host,
+                imap_port=cfg.gmail_imap_port,
+                smtp_host=cfg.gmail_smtp_host,
+                smtp_port=cfg.gmail_smtp_port,
+                mailbox=cfg.gmail_mailbox,
+                poll_seconds=cfg.gmail_poll_seconds,
+            )
+
         # A2A transport — optional. Constructed only when explicitly
         # enabled in alice.env. Import is lazy so worker images that
         # don't ship a2a-sdk (e.g. minimal builds) start fine.
@@ -462,6 +480,7 @@ class SpeakingDaemon:
             transports=(
                 self.cli_transport,
                 self.discord_transport,
+                self.gmail_transport,
                 self.a2a_transport,
                 self.viewer_chat_transport,
                 self.ws_transport,
@@ -482,6 +501,7 @@ class SpeakingDaemon:
                 "signal": self.signal_transport,
                 "cli": self.cli_transport,
                 "discord": self.discord_transport,
+                "gmail": self.gmail_transport,
                 "a2a": self.a2a_transport,
                 "viewer-chat": self.viewer_chat_transport,
                 "ws": self.ws_transport,
@@ -545,6 +565,7 @@ class SpeakingDaemon:
                 "signal": self.signal_transport,
                 "cli": self.cli_transport,
                 "discord": self.discord_transport,
+                "gmail": self.gmail_transport,
                 "a2a": self.a2a_transport,
                 "viewer-chat": self.viewer_chat_transport,
                 "ws": self.ws_transport,
@@ -1065,6 +1086,10 @@ class SpeakingDaemon:
                 await _stop_with_timeout(
                     "discord_transport", self.discord_transport.stop
                 )
+            if self.gmail_transport is not None:
+                await _stop_with_timeout(
+                    "gmail_transport", self.gmail_transport.stop
+                )
             if self.a2a_transport is not None:
                 await _stop_with_timeout(
                     "a2a_transport", self.a2a_transport.stop
@@ -1193,7 +1218,8 @@ class SpeakingDaemon:
 
     @staticmethod
     def _channel_key(channel: "ChannelRef") -> str:
-        return f"{channel.transport}:{channel.address}"
+        identity = channel.conversation_id or channel.address
+        return f"{channel.transport}:{identity}"
 
     def divert_to_mid_turn(
         self, channel: "ChannelRef", text: str, original_event: Any
@@ -1572,7 +1598,7 @@ class SpeakingDaemon:
             if channel is None:
                 raise RuntimeError(
                     "send_message(recipient='self') has no inbound channel "
-                    "to reply on (only valid during a signal/cli/discord/"
+                    "to reply on (only valid during a signal/cli/discord/gmail/"
                     "emergency turn)"
                 )
         else:
@@ -1596,7 +1622,7 @@ class SpeakingDaemon:
             channel.transport in ("cli", "a2a", "viewer-chat")
             or emergency
             or self._current_turn_kind
-            in ("signal", "discord", "cli", "a2a", "viewer-chat")
+            in ("signal", "discord", "gmail", "cli", "a2a", "viewer-chat")
             or bool(attachments)
         )
 

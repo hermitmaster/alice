@@ -72,6 +72,11 @@ class ChannelRef:
     transport: str
     address: str
     durable: bool
+    # Stable identity for one conversation within an address. Most
+    # transports have one conversation per address and leave this unset.
+    # Threaded transports (email, forums) set it so concurrent threads with
+    # the same principal do not share idle/mid-turn state.
+    conversation_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +151,18 @@ DISCORD_CAPS = Capabilities(
     long_message_strategy="split",
     typing_indicator=True,
     reactions=True,
+    interactive=False,
+)
+
+EMAIL_CAPS = Capabilities(
+    markdown="none",
+    code_blocks=False,
+    images_outbound=True,
+    files_outbound=True,
+    max_message_bytes=1_000_000,
+    long_message_strategy="split",
+    typing_indicator=False,
+    reactions=False,
     interactive=False,
 )
 

@@ -11,7 +11,7 @@ Design choices, all small:
 - Source: ``~/alice-mind/inner/thoughts/$(date +%Y-%m-%d)/`` — files are
   ``HHMMSS-wake.md`` (and longer-prefixed variants). Pick the latest by
   mtime; fall back to yesterday's directory if today's is empty.
-- Summarizer: ``qwen-local`` via the alice-litellm proxy's
+- Summarizer: configured LiteLLM model via the alice-litellm proxy's
   OpenAI-compatible ``/v1/chat/completions`` endpoint. Defaults target
   the in-container proxy at ``http://alice-litellm:4000/v1`` with the
   master key ``sk-alice-local``; override via ``face_caption`` in
@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 # container without the alice-litellm DNS) point at the LAN IP via
 # ``face_caption.base_url`` in alice.config.json.
 DEFAULT_LITELLM_BASE_URL = "http://alice-litellm:4000/v1"
-DEFAULT_LITELLM_MODEL = "qwen-local"
+DEFAULT_LITELLM_MODEL = os.environ.get("LITELLM_FACE_CAPTION_MODEL", "")
 # Master key shared by every LiteLLM call site; matches
 # ``LITELLM_MASTER_KEY`` env / sandbox compose default.
 DEFAULT_LITELLM_API_KEY = "sk-alice-local"
@@ -193,8 +193,7 @@ def _summarize_via_qwen(
     api_key: str = DEFAULT_LITELLM_API_KEY,
     client: Optional[httpx.Client] = None,
 ) -> Optional[str]:
-    """Call the LiteLLM proxy's OpenAI-compatible ``/chat/completions``
-    endpoint and return the trimmed summary, or ``None`` on failure.
+    """Call the configured raw LLM seam and return the trimmed summary.
 
     Same prompt shape as the prior Haiku call site: a ``system`` message
     pinning the output format and a ``user`` message carrying the wake
@@ -205,48 +204,32 @@ def _summarize_via_qwen(
     :class:`core.llm_client.LLMClient` uses. LiteLLM's
     ``drop_params: true`` strips this safely if a backend ignores it.
     """
-    headers = {"content-type": "application/json"}
-    if api_key:
-        headers["authorization"] = f"Bearer {api_key}"
-    payload = {
-        "model": model,
-        "max_tokens": LITELLM_MAX_TOKENS,
-        "temperature": LITELLM_TEMPERATURE,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": SUMMARIZER_SYSTEM_PROMPT},
-            {"role": "user", "content": body[:MAX_BODY_CHARS]},
-        ],
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    url = base_url.rstrip("/") + "/chat/completions"
-    owns_client = client is None
-    try:
-        client = client or httpx.Client(timeout=LITELLM_TIMEOUT_SECONDS)
-        try:
-            resp = client.post(url, json=payload, headers=headers)
-        finally:
-            if owns_client:
-                client.close()
-    except httpx.HTTPError as exc:
-        log.warning("face_caption: LiteLLM POST failed: %s", exc)
-        return None
-    if resp.status_code != 200:
+    if not model:
         log.warning(
-            "face_caption: LiteLLM returned %d: %s",
-            resp.status_code,
-            resp.text[:200],
+            "face_caption: model not configured; set LITELLM_FACE_CAPTION_MODEL "
+            "or face_caption.model"
         )
         return None
     try:
-        blob = resp.json()
-        content = blob["choices"][0]["message"]["content"]
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
-        log.warning("face_caption: malformed LiteLLM response: %s", exc)
+        from core.llm_client import LLMClient
+
+        llm = LLMClient(
+            endpoint=base_url,
+            model=model,
+            api_key=api_key,
+            temperature=LITELLM_TEMPERATURE,
+            timeout_seconds=LITELLM_TIMEOUT_SECONDS,
+            max_tokens=LITELLM_MAX_TOKENS,
+        )
+        content = llm.complete_text_sync(
+            body[:MAX_BODY_CHARS],
+            system_prompt=SUMMARIZER_SYSTEM_PROMPT,
+            client=client,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("face_caption: model call failed: %s", exc)
         return None
-    if not isinstance(content, str):
-        log.warning("face_caption: LiteLLM content is not a string")
-        return None
+
     raw = content.strip()
     if not raw:
         log.warning("face_caption: LiteLLM returned empty content")

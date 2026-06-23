@@ -155,9 +155,14 @@ class TurnRunner:
         # ``_build_spec`` for callers that haven't migrated yet.
         self._model = model
         # Plan-pi Phase B: backend spec used to construct the
-        # kernel via the factory. ``None`` defaults to the
-        # subscription path (legacy behavior).
-        self._backend = backend or BackendSpec(backend="subscription")
+        # kernel via the factory. ``None`` resolves from
+        # mind/config/model.yml so callers do not silently pin the
+        # harness/backend to subscription.
+        if backend is None:
+            from core.config.model import load as load_model_config
+
+            backend = load_model_config(mind_dir or cfg.mind_dir).speaking
+        self._backend = backend
         self._pi_send_message = pi_send_message
         # Plan-pi Phase C: kernel cwd points at the rendered skills
         # dir so the SDK auto-loader / pi discovery sees the
@@ -288,7 +293,7 @@ class TurnRunner:
 
     def _build_spec(self) -> KernelSpec:
         return KernelSpec(
-            model=self._model or self._cfg.speaking.get("model"),
+            model=self._model or self._backend.model or self._cfg.speaking.get("model"),
             allowed_tools=BUILTIN_TOOLS + self._custom_tool_names,
             mcp_servers=self._mcp_servers,
             cwd=self._skills_cwd or self._cfg.work_dir,

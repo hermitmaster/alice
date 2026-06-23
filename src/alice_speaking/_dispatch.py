@@ -70,6 +70,7 @@ if TYPE_CHECKING:
         A2AEvent,
         CLIEvent,
         DiscordEvent,
+        GmailEvent,
         EmergencyEvent,
         SignalEvent,
         SurfaceEvent,
@@ -552,6 +553,92 @@ async def handle_discord(ctx: DaemonContext, event: "DiscordEvent") -> None:
             "discord_turn_end",
             turn_id=turn_id,
             principal_id=msg.principal.native_id,
+            error=error,
+            duration_ms=int((time.time() - started) * 1000),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Gmail turn — one durable channel per RFC email thread.
+
+
+async def handle_gmail(ctx: DaemonContext, event: "GmailEvent") -> None:
+    assert ctx.gmail_transport is not None
+    msg = event.message
+    thread_id = msg.origin.conversation_id or msg.origin.address
+    _touch_inbound(ctx, "gmail", thread_id)
+    turn_id = uuid.uuid4().hex[:12]
+    started = time.time()
+    ctx.events.emit(
+        "gmail_turn_start",
+        turn_id=turn_id,
+        principal_id=msg.principal.native_id,
+        thread_id=thread_id,
+        subject=msg.metadata.get("subject", ""),
+        inbound_chars=len(msg.text),
+        inbound=_short(msg.text, 600),
+    )
+
+    prev_kind = ctx._current_turn_kind
+    prev_channel = ctx._current_reply_channel
+    prev_display_name = ctx._current_principal_display_name
+    ctx._current_turn_kind = "gmail"
+    ctx._current_reply_channel = msg.origin
+    ctx._current_principal_display_name = msg.principal.display_name
+    ctx._current_turn_replied = False
+    error: Optional[str] = None
+    try:
+        now = datetime.datetime.now().astimezone()
+        stamp = now.strftime("%A, %B %-d, %Y at %-I:%M %p %Z")
+        prompt = ctx.gmail_transport.build_prompt(
+            principal_name=msg.principal.display_name,
+            stamp=stamp,
+            subject=str(msg.metadata.get("subject") or ""),
+            text=msg.text,
+        )
+        await ctx._run_turn(
+            prompt,
+            turn_id=turn_id,
+            outbound_recipient=f"gmail:{msg.principal.native_id}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("gmail turn failed for %s", msg.principal.display_name)
+        error = f"{type(exc).__name__}: {exc}"
+        with contextlib.suppress(Exception):
+            await ctx.gmail_transport.send(
+                OutboundMessage(
+                    destination=msg.origin,
+                    text=(
+                        f"Hit an error ({type(exc).__name__}). "
+                        "The email thread is preserved; reply to retry."
+                    ),
+                )
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx._flush_mid_turn_inbox(msg.origin)
+        ctx._current_turn_kind = prev_kind
+        ctx._current_reply_channel = prev_channel
+        ctx._current_principal_display_name = prev_display_name
+        vault_context, vault_candidates = _vault_snapshot(ctx)
+        tool_calls = _tool_calls_snapshot(ctx)
+        ctx.turns.append(
+            new_turn(
+                sender_number=msg.principal.native_id,
+                sender_name=msg.principal.display_name,
+                inbound=msg.text,
+                outbound=ctx._turn_last_outbound,
+                error=error,
+                vault_context=vault_context,
+                vault_candidates=vault_candidates,
+                tool_calls=tool_calls,
+            )
+        )
+        ctx.events.emit(
+            "gmail_turn_end",
+            turn_id=turn_id,
+            principal_id=msg.principal.native_id,
+            thread_id=thread_id,
             error=error,
             duration_ms=int((time.time() - started) * 1000),
         )

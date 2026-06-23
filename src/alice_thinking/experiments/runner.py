@@ -127,7 +127,7 @@ DEFAULT_TIMEOUT_SECONDS = 30 * 60
 # Default subagent model. The subagent gets a small, cheap model by default
 # because experiments are usually a focused single-task workload. Overridable
 # via the dispatch ``model`` argument.
-DEFAULT_SUBAGENT_MODEL = "claude-sonnet-4-6"
+DEFAULT_SUBAGENT_MODEL = os.environ.get("ALICE_EXPERIMENT_SUBAGENT_MODEL", "")
 
 
 # Source repo for the writable-copy rsync. Hard-coded because the spec

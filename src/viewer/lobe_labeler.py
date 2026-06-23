@@ -173,7 +173,7 @@ def sanitise_label(raw: str) -> str:
 # provider prefix) because here we POST the bare model name straight at
 # the OpenAI-compatible chat endpoint. Mixing the two shapes 404s the
 # proxy. See issue #420 for the failure mode.
-QWEN_MODEL = os.environ.get("LITELLM_LABEL_MODEL", "qwen-local")
+QWEN_MODEL = os.environ.get("LITELLM_LABEL_MODEL", "")
 # LiteLLM proxy fronts the LAN Qwen runtime (and future local models).
 # Falls back to the direct LAN endpoint so dev outside the container
 # (where LITELLM_BASE_URL isn't set) still works. The model name is a
@@ -210,42 +210,29 @@ QWEN_TIMEOUT_S = 90.0
 
 
 async def call_qwen_async(prompt: str) -> str:
-    """Send ``prompt`` to the LAN Qwen endpoint and return the raw text.
-
-    Plain httpx POST against the OpenAI-compatible chat-completions
-    surface. No auth (LAN endpoint is unauthenticated). The viewer
-    image carries httpx already; we deliberately avoid pulling in
-    google-adk just for one chat call.
+    """Send ``prompt`` through the shared raw LLM client and return text.
 
     Returns ``""`` on transport errors or empty responses; callers
     treat that as "label unavailable" rather than raising.
     """
-    import httpx
-
-    payload = {
-        "model": QWEN_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.0,
-        "max_tokens": QWEN_MAX_TOKENS,
-        # Skip the reasoning pass — labeling is a closed-form task and
-        # the chain-of-thought just burns tokens. Drops a typical call
-        # from ~190 completion tokens to ~5.
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    headers = (
-        {"Authorization": f"Bearer {QWEN_API_KEY}"} if QWEN_API_KEY else None
-    )
-    async with httpx.AsyncClient(timeout=QWEN_TIMEOUT_S) as client:
-        resp = await client.post(
-            f"{QWEN_API_BASE}/chat/completions", json=payload, headers=headers
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    choices = data.get("choices") or []
-    if not choices:
+    if not QWEN_MODEL:
+        log.warning("lobe_labeler model not configured; set LITELLM_LABEL_MODEL")
         return ""
-    msg = (choices[0].get("message") or {}).get("content") or ""
-    return msg.strip()
+    try:
+        from core.llm_client import LLMClient
+
+        client = LLMClient(
+            endpoint=QWEN_API_BASE,
+            model=QWEN_MODEL,
+            api_key=QWEN_API_KEY,
+            temperature=0.0,
+            timeout_seconds=QWEN_TIMEOUT_S,
+            max_tokens=QWEN_MAX_TOKENS,
+        )
+        return (await client.complete_text(prompt)).strip()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lobe_labeler model call failed: %s", exc)
+        return ""
 
 
 # ---------------------------------------------------------------------------

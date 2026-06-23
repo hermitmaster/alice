@@ -17,18 +17,12 @@ in :mod:`alice_speaking.turn_runner` short-circuits when the packet
 is empty, so a degraded cue runner is indistinguishable from an
 unconfigured one.
 
-Phase 2 reranker swap path
---------------------------
+Phase 2 reranker path
+---------------------
 
-The reranker call goes through :func:`_call_reranker`, a thin
-abstraction. v1 ships with a hardcoded Anthropic SDK call so no extra
-dependency is required. To swap to a LiteLLM-fronted local model
-(e.g. ``qwen3-4b`` on Strix Halo), replace the body of
-:func:`_call_reranker` with an OpenAI-compatible call — LiteLLM
-exposes the OpenAI shape — and route via
-``cfg["reranker"]["litellm_endpoint"]``. The model name is read from
-``cfg["reranker"]["model"]`` so swapping is a config change rather
-than a code change once the alternate path lands.
+The reranker call goes through :class:`core.llm_client.LLMClient`, the
+shared OpenAI-compatible raw-call seam. Endpoint, API key, model, and
+timeout are config-driven through ``cfg["reranker"]`` / LiteLLM env.
 """
 
 from __future__ import annotations
@@ -38,6 +32,7 @@ import datetime
 import json
 import logging
 import math
+import os
 import pathlib
 import re
 import sqlite3
@@ -771,43 +766,22 @@ async def _call_reranker(
     candidates: list[_Candidate],
     cfg: dict[str, Any],
 ) -> list[_Candidate]:
-    """Rerank ``candidates`` with an LLM. Returns the reranked list.
-
-    v1 hardcodes the Anthropic SDK + Haiku. To swap to a LiteLLM-
-    fronted local model (the long-term plan — ``qwen3-4b`` on Strix
-    Halo), replace this body with an OpenAI-compatible call. LiteLLM
-    exposes the OpenAI shape, so the swap is mechanical:
-
-    .. code-block:: python
-
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(
-            base_url=cfg["reranker"]["litellm_endpoint"],
-            api_key="ignored",
-        )
-        resp = await client.chat.completions.create(
-            model=cfg["reranker"]["model"],
-            messages=[...],
-        )
-
-    The model name MUST come from ``cfg["reranker"]["model"]`` —
-    never hardcode it (Jason explicitly authorised this 2026-05-06
-    07:30 EDT and reserved the right to swap).
+    """Rerank ``candidates`` with a configured raw LLM call.
 
     On any error (network, malformed response, hallucinated slug)
     return the input ``candidates`` unchanged so the caller falls
     back to the boost-ranked order.
     """
     reranker_cfg = cfg.get("reranker", {})
-    model = reranker_cfg.get("model", "claude-haiku-4-5-20251001")
-    timeout_s = reranker_cfg.get("timeout_ms", 1500) / 1000.0
-    try:
-        # Lazy import: the SDK is optional in v1 — without it the
-        # reranker is simply disabled.
-        import anthropic  # type: ignore[import-not-found]
-    except ImportError:
-        log.debug("anthropic SDK not installed; reranker disabled")
+    model = reranker_cfg.get("model", "")
+    if not model:
+        log.debug("reranker model not configured; reranker disabled")
         return candidates
+    timeout_s = reranker_cfg.get("timeout_ms", 1500) / 1000.0
+    endpoint = reranker_cfg.get("litellm_endpoint") or os.environ.get(
+        "LITELLM_BASE_URL", ""
+    )
+    api_key = reranker_cfg.get("api_key") or os.environ.get("LITELLM_MASTER_KEY", "")
 
     candidates_block = _format_candidates_for_rerank(candidates)
     prompt = (
@@ -820,27 +794,23 @@ async def _call_reranker(
         "nothing is relevant.\n\n"
         f"Candidates:\n{candidates_block}"
     )
-    client = anthropic.Anthropic()
     try:
-        resp = await asyncio.wait_for(
-            asyncio.to_thread(
-                client.messages.create,
+        from core.llm_client import LLMClient
+
+        client = LLMClient(
+            **({"endpoint": endpoint} if endpoint else {}),
                 model=model,
-                max_tokens=600,
-                messages=[{"role": "user", "content": prompt}],
-            ),
+            api_key=api_key,
+            temperature=0.0,
+            timeout_seconds=timeout_s,
+            max_tokens=600,
+        )
+        text = await asyncio.wait_for(
+            client.complete_text(prompt),
             timeout=timeout_s,
         )
     except (asyncio.TimeoutError, Exception):  # noqa: BLE001
         log.debug("reranker call failed; falling back to boost order", exc_info=True)
-        return candidates
-
-    text = ""
-    try:
-        for block in resp.content:
-            if getattr(block, "type", None) == "text":
-                text += block.text
-    except (AttributeError, TypeError):
         return candidates
 
     return _apply_rerank(text, candidates)

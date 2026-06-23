@@ -14,15 +14,15 @@ import json
 import os
 import pathlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import AsyncIterator
 
 from . import aggregators, bucket_cache, sources
 from .settings import Paths
 
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
-BUCKET_MODEL = "claude-haiku-4-5"  # one-shot bucket summaries — Haiku is plenty
+DEFAULT_MODEL = os.environ.get("ALICE_VIEWER_NARRATIVE_MODEL", "")
+BUCKET_MODEL = os.environ.get("ALICE_VIEWER_BUCKET_MODEL", "")
 # Wall-clock cap on the streamed merge step. Covers the entire async
 # iteration over the SDK's stream — if Claude (or whatever's proxying
 # it) hangs without yielding, we surface an SSE ``error`` event
@@ -59,6 +59,97 @@ def _ensure_auth():
     from core.config.auth import ensure_auth_env
 
     return ensure_auth_env()
+
+
+def _default_mind() -> pathlib.Path:
+    return pathlib.Path(
+        os.environ.get("ALICE_MIND") or pathlib.Path.home() / "alice-mind"
+    )
+
+
+def _load_viewer_backend(*, model_override: str = ""):
+    from core.config.model import load as load_model_config
+
+    backend = load_model_config(_default_mind()).viewer
+    if model_override:
+        backend = replace(backend, model=model_override)
+    return backend
+
+
+def _backend_with_model(backend: object, model_override: str):
+    if model_override:
+        return replace(backend, model=model_override)
+    return backend
+
+
+async def _run_kernel_stream(
+    prompt: str,
+    *,
+    backend: object,
+    max_seconds: int,
+) -> AsyncIterator[dict]:
+    """Run one tool-less viewer call through the configured kernel."""
+    from core.events import CapturingEmitter
+    from core.kernel import KernelSpec, NullHandler, make_kernel
+
+    if not getattr(backend, "model", ""):
+        yield {
+            "type": "error",
+            "message": "viewer narrative model is not configured; set viewer.model in model.yml or ALICE_VIEWER_NARRATIVE_MODEL",
+        }
+        return
+
+    queue: asyncio.Queue[dict] = asyncio.Queue()
+
+    class _TextQueueHandler(NullHandler):
+        async def on_text(self, text: str) -> None:
+            await queue.put({"type": "chunk", "text": text})
+
+    emitter = CapturingEmitter()
+    kernel = make_kernel(
+        backend,
+        emitter,
+        correlation_id=f"viewer-narrative-{int(time.time())}",
+        silent=True,
+    )
+    spec = KernelSpec(
+        model=getattr(backend, "model", ""),
+        allowed_tools=[],
+        cwd=pathlib.Path("/tmp"),
+        max_seconds=max_seconds,
+    )
+
+    async def _run():
+        return await kernel.run(prompt, spec, handlers=[_TextQueueHandler()])
+
+    task = asyncio.create_task(_run())
+    while True:
+        if task.done() and queue.empty():
+            break
+        try:
+            yield await asyncio.wait_for(queue.get(), timeout=0.1)
+        except asyncio.TimeoutError:
+            continue
+
+    try:
+        result = await task
+    except Exception as exc:  # noqa: BLE001
+        yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+        return
+
+    yield {
+        "type": "result",
+        "duration_ms": result.duration_ms,
+        "cost_usd": result.cost_usd,
+        "session_id": result.session_id,
+    }
+    if result.error == "timeout":
+        yield {"type": "error", "message": f"timed out after {max_seconds}s"}
+        return
+    if result.is_error:
+        yield {"type": "error", "message": result.text or "kernel returned is_error"}
+        return
+    yield {"type": "done"}
 
 
 def build_digest(paths: Paths, window_seconds: int, max_events: int) -> dict:
@@ -250,6 +341,7 @@ async def stream_narrative(
     prompt: str,
     *,
     model: str = DEFAULT_MODEL,
+    backend: object | None = None,
     max_seconds: int = DEFAULT_MAX_SECONDS,
 ) -> AsyncIterator[dict]:
     """Yield events: {"type": "chunk", "text": "..."} and finally {"type": "done"}
@@ -261,56 +353,14 @@ async def stream_narrative(
             "message": "no Claude credentials in env or alice.env (set CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)",
         }
         return
-
-    try:
-        # Import lazily so startup doesn't require the SDK/claude CLI to exist.
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ClaudeAgentOptions,
-            ResultMessage,
-            TextBlock,
-            query,
-        )
-    except ImportError as exc:
-        yield {"type": "error", "message": f"claude-agent-sdk not installed: {exc}"}
-        return
-
-    options = ClaudeAgentOptions(
-        model=model,
-        allowed_tools=[],
-        cwd="/tmp",
+    resolved_backend = (
+        _backend_with_model(backend, model) if backend is not None
+        else _load_viewer_backend(model_override=model)
     )
-    try:
-        async with asyncio.timeout(max_seconds):
-            async for msg in query(prompt=prompt, options=options):
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            yield {"type": "chunk", "text": block.text}
-                    if msg.error:
-                        yield {"type": "error", "message": str(msg.error)}
-                        return
-                elif isinstance(msg, ResultMessage):
-                    yield {
-                        "type": "result",
-                        "duration_ms": msg.duration_ms,
-                        "cost_usd": msg.total_cost_usd,
-                        "session_id": msg.session_id,
-                    }
-                    if msg.is_error:
-                        yield {
-                            "type": "error",
-                            "message": msg.result or "claude returned is_error",
-                        }
-                        return
-    except asyncio.TimeoutError:
-        yield {"type": "error", "message": f"timed out after {max_seconds}s"}
-        return
-    except Exception as exc:  # noqa: BLE001
-        yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
-        return
-
-    yield {"type": "done"}
+    async for ev in _run_kernel_stream(
+        prompt, backend=resolved_backend, max_seconds=max_seconds
+    ):
+        yield ev
 
 
 WINDOW_PRESETS = {
@@ -433,7 +483,11 @@ def _bucket_prompt(slot: BucketSlot) -> str:
     )
 
 
-async def _summarize_bucket(slot: BucketSlot) -> bucket_cache.BucketSummary:
+async def _summarize_bucket(
+    slot: BucketSlot,
+    *,
+    backend: object | None = None,
+) -> bucket_cache.BucketSummary:
     """Call Claude for one bucket. Returns a BucketSummary ready to cache."""
     if not slot.events:
         return bucket_cache.BucketSummary(
@@ -450,7 +504,12 @@ async def _summarize_bucket(slot: BucketSlot) -> bucket_cache.BucketSummary:
     started = time.time()
     # Per-bucket wall-clock cap — see BUCKET_MAX_SECONDS docstring.
     async with asyncio.timeout(BUCKET_MAX_SECONDS):
-        text, cost = await _run_once(prompt, max_output_tokens_hint=300)
+        text, cost = await _run_once(
+            prompt,
+            backend=backend,
+            model=BUCKET_MODEL,
+            max_output_tokens_hint=300,
+        )
     return bucket_cache.BucketSummary(
         bucket_start=slot.start,
         bucket_seconds=slot.end - slot.start,
@@ -464,7 +523,11 @@ async def _summarize_bucket(slot: BucketSlot) -> bucket_cache.BucketSummary:
 
 
 async def _run_once(
-    prompt: str, *, max_output_tokens_hint: int = 500
+    prompt: str,
+    *,
+    backend: object | None = None,
+    model: str = "",
+    max_output_tokens_hint: int = 500,
 ) -> tuple[str, float]:
     """Non-streaming LLM call — used for per-bucket summaries."""
     auth = _ensure_auth()
@@ -472,36 +535,30 @@ async def _run_once(
         raise RuntimeError(
             "no Claude credentials (set CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)"
         )
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
+    resolved_backend = (
+        _backend_with_model(backend, model) if backend is not None
+        else _load_viewer_backend(model_override=model)
     )
-
-    options = ClaudeAgentOptions(
-        model=BUCKET_MODEL,
-        allowed_tools=[],
-        cwd="/tmp",
-    )
-    parts: list[str] = []
+    chunks: list[str] = []
     cost = 0.0
-    async for msg in query(prompt=prompt, options=options):
-        if isinstance(msg, AssistantMessage):
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    parts.append(block.text)
-        elif isinstance(msg, ResultMessage):
-            cost = float(msg.total_cost_usd or 0)
-            if msg.is_error:
-                raise RuntimeError(msg.result or "claude is_error")
-    return "".join(parts), cost
+    async for ev in _run_kernel_stream(
+        prompt,
+        backend=resolved_backend,
+        max_seconds=BUCKET_MAX_SECONDS,
+    ):
+        if ev["type"] == "chunk":
+            chunks.append(ev["text"])
+        elif ev["type"] == "result":
+            cost = float(ev.get("cost_usd") or 0)
+        elif ev["type"] == "error":
+            raise RuntimeError(ev.get("message") or "viewer bucket call failed")
+    return "".join(chunks), cost
 
 
 async def ensure_bucket_cache(
     slots: list[BucketSlot],
     *,
+    backend: object | None = None,
     progress_cb=None,
 ) -> list[bucket_cache.BucketSummary]:
     """For each slot, return a cached or freshly-generated BucketSummary.
@@ -546,7 +603,7 @@ async def ensure_bucket_cache(
     async def _one(idx: int, slot: BucketSlot):
         async with sem:
             try:
-                summary = await _summarize_bucket(slot)
+                summary = await _summarize_bucket(slot, backend=backend)
                 persist = not slot.is_open(now_ts)
             except Exception as exc:  # noqa: BLE001 — includes asyncio.TimeoutError
                 # One bucket failing is recoverable: record an empty
