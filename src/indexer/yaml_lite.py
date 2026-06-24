@@ -85,7 +85,17 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
                 out[key] = ""
             i = j
             continue
-        # inline value
+        # inline value — handle multi-line flow-style lists
+        if rest.startswith("[") and not rest.endswith("]"):
+            # Flow-style list spans multiple lines; accumulate until closing ]
+            multi = rest
+            j = i + 1
+            while j < len(lines) and not multi.rstrip().endswith("]"):
+                multi += " " + lines[j].strip()
+                j += 1
+            out[key] = _parse_scalar(multi)
+            i = j
+            continue
         out[key] = _parse_scalar(rest)
         i += 1
     return out
