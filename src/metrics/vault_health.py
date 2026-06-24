@@ -1436,6 +1436,184 @@ def compute_decay_coverage(
     }
 
 
+# ---------------------------------------------------------------------------
+# Rolling decay pool
+# Design: [[decay-pool-rollover-design]]
+# A 90-day window of notes that have entered decay, complementing the
+# static activation pool. Provides real-time visibility into current
+# decay state.
+# ---------------------------------------------------------------------------
+
+_ROLLING_POOL_WINDOW_DAYS = 90
+_ROLLING_POOL_AGE_CLIFF_DAYS = 11
+
+
+def compute_rolling_pool_coverage(
+    vault_dir: Path,
+    window_days: int = _ROLLING_POOL_WINDOW_DAYS,
+    age_cliff_days: int = _ROLLING_POOL_AGE_CLIFF_DAYS,
+    today: datetime | None = None,
+) -> dict[str, Any]:
+    """Compute rolling decay pool coverage.
+
+    **Rolling pool** (90-day window):
+    - ``created`` between ``today - window_days`` and ``today - age_cliff_days``
+    - ``access_count == 0`` (never accessed)
+    - Excludes dailies, archive, gh-state, decisions, feedback, fitness-domain
+    - Disjoint from the static pool by construction (creation date filter)
+
+    **Structural coverage:** Same algorithm as the static pool — a note is
+    "structurally covered" if it has ≥ 1 inbound link from a recently-accessed
+    note (last_accessed within 7-day window).
+
+    Returns ``{"rolling_decay_count", "rolling_structural_recovered",
+    "rolling_decay_structural_pct", "by_domain"}``.
+    """
+    if today is None:
+        today = _local_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = today.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+
+    # Creation date bounds
+    window_start = today - timedelta(days=window_days)
+    age_cutoff = today - timedelta(days=age_cliff_days)
+
+    # 7-day access window for structural coverage
+    window_floor = today - timedelta(days=7)
+
+    # Excluded folders (same as static pool, plus decisions/feedback)
+    excluded = frozenset(
+        {"dailies", "archive", "gh-state", "decisions", "feedback"}
+    )
+
+    by_domain: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"decayed": 0, "struct_recovered": 0}
+    )
+    total_rolling = 0
+    total_struct_recovered = 0
+
+    # Structural reachability: pre-build resolution index + tracking sets.
+    by_slug, _slugs_to_aliases, alias_lower_to_slug = _build_resolution_index(
+        vault_dir
+    )
+    rolling_by_slug: dict[str, str] = {}      # slug_lower → domain
+    rolling_rel_to_slug: dict[str, str] = {}   # rel_lower → slug_lower
+    accessed_slugs: set[str] = set()           # recently-accessed slugs
+
+    # First pass: identify recently-accessed notes (for structural links)
+    # and collect the rolling pool.
+    for md in _iter_notes(vault_dir):
+        rel_parts = md.relative_to(vault_dir).parts
+        if rel_parts and rel_parts[0] in excluded:
+            continue
+        text = _read_text(md)
+        fm, body = split_frontmatter(text)
+
+        if _is_fitness_domain(fm):
+            continue
+
+        created = _parse_created_date(fm.get("created"))
+        if created is None:
+            continue
+
+        # Creation date bounds for rolling pool
+        if created < window_start or created >= age_cutoff:
+            # Still check if this is a recently-accessed note (for structural
+            # link scanning from outside the rolling pool)
+            last_accessed = _parse_last_accessed(fm.get("last_accessed"))
+            if last_accessed is not None and last_accessed >= window_floor:
+                # Collect its targets for structural link scanning
+                targets: list[str] = list(_extract_targets(body))
+                for val in fm.values():
+                    if isinstance(val, str):
+                        targets.extend(_extract_targets(val))
+                    elif isinstance(val, list):
+                        for item in val:
+                            if isinstance(item, str):
+                                targets.extend(_extract_targets(item))
+                for target in targets:
+                    target_lower = target.lower()
+                    if target_lower in rolling_by_slug:
+                        accessed_slugs.add(target_lower)
+            continue
+
+        # This note is in the rolling pool. Check access_count.
+        access_count = _parse_access_count(fm.get("access_count"))
+        if access_count is None or access_count > 0:
+            continue
+
+        rel = str(md.relative_to(vault_dir))
+        domain = _note_domain(fm, rel)
+        total_rolling += 1
+        by_domain[domain]["decayed"] += 1
+
+        slug = _slug_from_fm(fm, md.stem) or md.stem
+        slug_lower = slug.lower()
+        rolling_by_slug[slug_lower] = domain
+        rolling_rel_to_slug[rel.lower()] = slug_lower
+
+    # Structural reachability: for each recently-accessed note, follow its
+    # wikilink targets to find rolling pool notes it links to.
+    for md in _iter_notes(vault_dir):
+        text = _read_text(md)
+        fm, body = split_frontmatter(text)
+        last_accessed = _parse_last_accessed(fm.get("last_accessed"))
+        if last_accessed is None or last_accessed < window_floor:
+            continue
+        targets: list[str] = list(_extract_targets(body))
+        for val in fm.values():
+            if isinstance(val, str):
+                targets.extend(_extract_targets(val))
+            elif isinstance(val, list):
+                for item in val:
+                    if isinstance(item, str):
+                        targets.extend(_extract_targets(item))
+        for target in targets:
+            target_lower = target.lower()
+            if target_lower in rolling_by_slug:
+                accessed_slugs.add(target_lower)
+                continue
+            resolved = _resolve_rel(
+                target, vault_dir, by_slug, alias_lower_to_slug,
+            )
+            if resolved is not None:
+                if resolved.lower() in rolling_rel_to_slug:
+                    accessed_slugs.add(
+                        rolling_rel_to_slug[resolved.lower()],
+                    )
+
+    # Compute per-domain structural counts
+    struct_by_domain: dict[str, int] = defaultdict(int)
+    for slug_lower in accessed_slugs:
+        struct_by_domain[rolling_by_slug[slug_lower]] += 1
+
+    total_struct_recovered = len(accessed_slugs)
+    struct_coverage = (
+        round(100.0 * total_struct_recovered / total_rolling, 2)
+        if total_rolling > 0
+        else 100.0
+    )
+
+    domain_payload: dict[str, dict[str, float | int]] = {}
+    for domain, counts in sorted(by_domain.items()):
+        d_total = counts["decayed"]
+        d_struct = struct_by_domain.get(domain, 0)
+        d_struct_pct = (
+            round(100.0 * d_struct / d_total, 2) if d_total > 0 else 0.0
+        )
+        domain_payload[domain] = {
+            "decayed": d_total,
+            "struct_recovered": d_struct,
+            "structural_coverage_pct": d_struct_pct,
+        }
+
+    return {
+        "rolling_decay_count": total_rolling,
+        "rolling_structural_recovered": total_struct_recovered,
+        "rolling_decay_structural_pct": struct_coverage,
+        "by_domain": domain_payload,
+    }
+
+
 def compute_template_adherence(note_path: Path, schema: list[str]) -> float:
     """Score a note against a list of expected ``##`` section headings.
 
@@ -2611,6 +2789,11 @@ def build_vault_health_event(
         ),
         "research_decay_count": count_research_decay(vault_dir),
         "decay_coverage": compute_decay_coverage(vault_dir, today=today_midnight),
+        # Rolling pool coverage — real-time view of current decay state.
+        # Complementary to the static pool (decay_coverage).
+        "rolling_pool": compute_rolling_pool_coverage(
+            vault_dir, today=today_midnight,
+        ),
         "access_decay": count_access_decay(vault_dir),
         # Correction cascade: unpropagated corrections during grooming.
         # See cortex-memory/research/2026-06-11-correction-cascade-detection-design.md.
@@ -2954,6 +3137,10 @@ def main(argv: list[str] | None = None) -> int:
     # Decay coverage (Layer 1 blind-spot detection): % of activation-era
     # decayed pool that has been accessed since the cue runner came online.
     out["decay_coverage"] = compute_decay_coverage(args.vault)
+
+    # Rolling pool coverage — real-time view of current decay state.
+    # Complementary to the static pool (decay_coverage).
+    out["rolling_pool"] = compute_rolling_pool_coverage(args.vault)
 
     # Behavioral decay: notes with zero access older than 5 days.
     out["access_decay"] = count_access_decay(args.vault)
