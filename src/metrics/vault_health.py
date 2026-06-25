@@ -2646,6 +2646,69 @@ def _sleep_window_closed(scan_dt: datetime) -> bool:
     return eastern.hour >= 7
 
 
+def compute_stage_d_drought(
+    events_path: Path | None,
+    thoughts_dir: Path,
+    window_closed: bool,
+    *,
+    lookback_days: int = 3,
+) -> bool:
+    """Return True iff Stage D is genuinely dormant for ``lookback_days`` days.
+
+    Moves the drought detection out of the thinker prompt (active.md), which
+    had no access to ``sleep_window_closed`` and fired ``stage_d_drought:
+    true`` against partial-window data (the 2026-06-24 01:04 EDT false
+    positive). Conditions — ALL must hold:
+
+    1. ``window_closed`` is True — the 23:00→07:00 Eastern sleep window has
+       fully elapsed. Before that the wake distribution is partial and
+       ``stage_d == 0`` is meaningless (Stage D wakes cluster 00:27–02:20).
+    2. The last ``lookback_days`` vault_health events all have
+       ``wake_type_distribution.stage_d == 0``.
+    3. At least one of those events has ``research_notes_last_night > 0``
+       (eligible vault state — there was something for Stage D to chew on).
+
+    Returns False on any of: window not closed, fewer than ``lookback_days``
+    events on record, a missing/unreadable events file, any event with
+    ``stage_d > 0``, or no event with research notes.
+
+    Design: cortex-memory/research/2026-06-24-stage-d-drought-code-design.md.
+    """
+    if not window_closed or events_path is None:
+        return False
+
+    try:
+        lines = list(reversed(events_path.read_text().strip().splitlines()))
+    except (FileNotFoundError, OSError):
+        return False
+
+    events: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if evt.get("type") != "vault_health":
+            continue
+        events.append(evt)
+        if len(events) >= lookback_days:
+            break
+
+    if len(events) < lookback_days:
+        return False
+
+    for evt in events:
+        wd = evt.get("wake_type_distribution", {})
+        if isinstance(wd, dict) and wd.get("stage_d", 0) != 0:
+            return False
+
+    for evt in events:
+        if evt.get("research_notes_last_night", 0) > 0:
+            return True
+
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Full-event assembly
 # ---------------------------------------------------------------------------
@@ -2806,6 +2869,16 @@ def build_vault_health_event(
             "adr": _aggregate_adr_template_adherence(vault_dir),
         },
     }
+
+    # Drought flag — computed in-code with sleep_window_closed awareness,
+    # replacing the prompt-level instruction that used to live in
+    # active.md:107. The prompt couldn't read the event's own
+    # sleep_window_closed field and fired against partial-window data.
+    event["stage_d_drought"] = compute_stage_d_drought(
+        events_path=events_path,
+        thoughts_dir=thoughts_dir,
+        window_closed=window_closed,
+    )
 
     # Recovery state uses a 14-day rolling window ending today.
     recovery_ws = today_midnight - timedelta(days=14)

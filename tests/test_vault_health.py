@@ -32,6 +32,7 @@ from metrics.vault_health import (
     compute_continuous_checks,
     compute_decay_coverage,
     compute_decay_score,
+    compute_stage_d_drought,
     compute_template_adherence,
     count_broken_wikilinks,
     count_inbound_links,
@@ -3697,3 +3698,95 @@ def test_compute_all_links_degree_dedupes_per_source(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert compute_all_links_degree(vault, target) == 1
+
+
+# ---------------------------------------------------------------------------
+# compute_stage_d_drought
+# ---------------------------------------------------------------------------
+
+
+def _write_vault_health_events(
+    path: Path, specs: list[tuple[int, int]]
+) -> Path:
+    """Write vault_health events to ``path`` as jsonl.
+
+    ``specs`` is a list of ``(stage_d, research_notes_last_night)`` tuples,
+    oldest first (the function reads most-recent-last in file order).
+    """
+    lines = []
+    for stage_d, research in specs:
+        lines.append(
+            json.dumps(
+                {
+                    "type": "vault_health",
+                    "wake_type_distribution": {
+                        "stage_b": 5,
+                        "stage_c": 1,
+                        "stage_d": stage_d,
+                    },
+                    "research_notes_last_night": research,
+                }
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_compute_stage_d_drought_window_not_closed(tmp_path: Path) -> None:
+    """False when the sleep window hasn't closed, regardless of data."""
+    events = _write_vault_health_events(
+        tmp_path / "events.jsonl", [(0, 2), (0, 1), (0, 3)]
+    )
+    assert (
+        compute_stage_d_drought(events, tmp_path, window_closed=False) is False
+    )
+
+
+def test_compute_stage_d_drought_insufficient_data(tmp_path: Path) -> None:
+    """False with fewer than lookback_days events on record."""
+    events = _write_vault_health_events(
+        tmp_path / "events.jsonl", [(0, 2), (0, 1)]
+    )
+    assert (
+        compute_stage_d_drought(events, tmp_path, window_closed=True) is False
+    )
+
+
+def test_compute_stage_d_drought_stage_d_nonzero(tmp_path: Path) -> None:
+    """False when any event in the window has stage_d > 0."""
+    events = _write_vault_health_events(
+        tmp_path / "events.jsonl", [(0, 2), (2, 1), (0, 3)]
+    )
+    assert (
+        compute_stage_d_drought(events, tmp_path, window_closed=True) is False
+    )
+
+
+def test_compute_stage_d_drought_no_research_notes(tmp_path: Path) -> None:
+    """False when no event in the window has research_notes_last_night > 0."""
+    events = _write_vault_health_events(
+        tmp_path / "events.jsonl", [(0, 0), (0, 0), (0, 0)]
+    )
+    assert (
+        compute_stage_d_drought(events, tmp_path, window_closed=True) is False
+    )
+
+
+def test_compute_stage_d_drought_true(tmp_path: Path) -> None:
+    """True when window closed, last 3 events stage_d==0, research present."""
+    events = _write_vault_health_events(
+        tmp_path / "events.jsonl", [(0, 0), (0, 2), (0, 0)]
+    )
+    assert (
+        compute_stage_d_drought(events, tmp_path, window_closed=True) is True
+    )
+
+
+def test_compute_stage_d_drought_missing_file(tmp_path: Path) -> None:
+    """False (not a crash) when the events file does not exist."""
+    assert (
+        compute_stage_d_drought(
+            tmp_path / "nope.jsonl", tmp_path, window_closed=True
+        )
+        is False
+    )
