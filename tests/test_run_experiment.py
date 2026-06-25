@@ -603,6 +603,31 @@ async def test_end_to_end_failed_stub_when_subagent_does_not_submit(tmp_path: pa
     assert record["status"] == "failed"
 
 
+@pytest.mark.parametrize("env_value", [None, ""])
+def test_default_subagent_model_never_empty(monkeypatch, env_value):
+    """Regression: docker-compose passes an empty ALICE_EXPERIMENT_SUBAGENT_MODEL
+    into the container when the host leaves it unset. A get-default would yield
+    "" and dispatch ``--model ""``, which the API rejects with
+    "model: String should have at least 1 character". The module must fall back
+    to a real model id for both the unset and the empty-string cases."""
+    import importlib
+
+    if env_value is None:
+        monkeypatch.delenv("ALICE_EXPERIMENT_SUBAGENT_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("ALICE_EXPERIMENT_SUBAGENT_MODEL", env_value)
+
+    import alice_thinking.experiments.runner as runner_mod
+
+    importlib.reload(runner_mod)
+    try:
+        assert runner_mod.DEFAULT_SUBAGENT_MODEL
+    finally:
+        # Restore the module to the ambient-env state for other tests.
+        monkeypatch.undo()
+        importlib.reload(runner_mod)
+
+
 # ---------------------------------------------------------------------------
 # Note: async tests use the explicit ``@pytest.mark.asyncio`` decorator;
 # the project's pytest-asyncio mode is "strict" (per pyproject.toml) so we

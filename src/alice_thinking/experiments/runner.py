@@ -127,7 +127,14 @@ DEFAULT_TIMEOUT_SECONDS = 30 * 60
 # Default subagent model. The subagent gets a small, cheap model by default
 # because experiments are usually a focused single-task workload. Overridable
 # via the dispatch ``model`` argument.
-DEFAULT_SUBAGENT_MODEL = os.environ.get("ALICE_EXPERIMENT_SUBAGENT_MODEL", "")
+# ``or`` (not a get-default) is deliberate: docker-compose passes
+# ``ALICE_EXPERIMENT_SUBAGENT_MODEL: "${ALICE_EXPERIMENT_SUBAGENT_MODEL}"``,
+# which sets the var to an empty string inside the container when the host
+# leaves it unset. A get-default would return "" and dispatch ``--model ""``,
+# which the API rejects with "model: String should have at least 1 character".
+DEFAULT_SUBAGENT_MODEL = (
+    os.environ.get("ALICE_EXPERIMENT_SUBAGENT_MODEL") or "claude-sonnet-4-6"
+)
 
 
 # Source repo for the writable-copy rsync. Hard-coded because the spec
