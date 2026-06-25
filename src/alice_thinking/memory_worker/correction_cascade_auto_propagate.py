@@ -30,8 +30,8 @@ Example usage::
 Safety
 ------
 
-- Dry-run mode by default (``_DRY_RUN = True``). First 3 runs should
-  stay dry. Toggle to ``False`` only after manual review of dry-run output.
+- Production mode (``_DRY_RUN = False``) as of 2026-06-24, after dry-run
+  review and clean validation runs on 2026-06-23.
 - Per-note limit: max 10 correction links added per note per run.
 - Idempotent: checks for existing ``[[correction-slug]]`` in the body
   before writing. Running twice produces no second changes.
@@ -109,9 +109,10 @@ logger = logging.getLogger(__name__)
 #: Max correction links to add per note in a single run.
 _MAX_CORRECTIONS_PER_NOTE = 10
 
-#: Dry-run mode (default for first 3 runs). Set to ``False`` after
-#: manual review of dry-run output.
-_DRY_RUN = True
+#: Dry-run mode. Set to ``False`` after manual review of dry-run output;
+#: validated by clean production runs on 2026-06-23 (severity filter correct,
+#: 0 low-severity propagated).
+_DRY_RUN = False
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
 
