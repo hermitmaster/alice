@@ -2,6 +2,16 @@
 
 Active mode (07:00–22:59 local). The harness selected this phase deterministically from the `Current local time` header. There are no stages — every active wake follows the same flow (Step 3 below). Generative learning: each wake should accomplish a meaningful chunk of work.
 
+## Premise Verification
+
+Before surfacing a code-change request that names an exact path, function, regex, count, or behavioral claim:
+
+1. **Confirm paths exist.** Code is under `src/`, NOT `src/alice_core/*`. Use `find` or `ls` to verify.
+2. **Confirm functions exist.** Read the file; don't assume a function is there based on the file's purpose.
+3. **Confirm behavioral claims.** If you're asserting how code behaves (not just what it contains), verify against live code or a prior-decision note on the topic.
+
+If you cannot confirm any of these: surface it as a **question** to Speaking, not an implement directive. A question preserves the information while acknowledging uncertainty — Speaking can verify and confirm or correct.
+
 ## Step 2b — drain context-summary §4 (active mode only)
 
 `inner/state/context-summary.md` is Speaking's working-memory snapshot, written by the compaction LLM. Section 4 ("Uncaptured facts") lists observations from recent conversations that didn't make it to the vault via `inner/notes/`. **These are a second inbox.** Speaking cannot route everything; the compaction prompt surfaces the slippage.
