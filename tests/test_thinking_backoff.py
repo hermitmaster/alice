@@ -306,3 +306,42 @@ def test_last_wake_timestamp_write_is_atomic(tmp_path: pathlib.Path) -> None:
     write_last_wake_timestamp(p, time.time())
     leftovers = list(tmp_path.glob("*.tmp"))
     assert leftovers == []
+
+
+# ---------- opt-in active-mode idle backoff ----------
+
+
+def test_active_idle_backoff_off_by_default() -> None:
+    from alice_thinking.backoff import active_idle_backoff_cap_seconds
+
+    assert active_idle_backoff_cap_seconds({}) == 0
+    assert active_idle_backoff_cap_seconds({"ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN": "x"}) == 0
+    assert active_idle_backoff_cap_seconds({"ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN": "0"}) == 0
+
+
+def test_active_idle_backoff_cap_is_clamped() -> None:
+    from alice_thinking.backoff import active_idle_backoff_cap_seconds
+
+    assert active_idle_backoff_cap_seconds({"ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN": "15"}) == 900
+    assert (
+        active_idle_backoff_cap_seconds({"ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN": "999"})
+        == MAX_INTERVAL_SECONDS
+    )
+
+
+def test_active_idle_backoff_ladder_and_reset() -> None:
+    cap = 20 * 60
+    seq = BASE_INTERVAL_SECONDS
+    seen = []
+    for _ in range(4):
+        seq = next_interval_seconds(
+            prev_seconds=seq, mode="active", did_work=False, active_idle_cap_seconds=cap
+        )
+        seen.append(seq)
+    assert seen == [600, 1200, 1200, 1200]
+    assert (
+        next_interval_seconds(
+            prev_seconds=1200, mode="active", did_work=True, active_idle_cap_seconds=cap
+        )
+        == BASE_INTERVAL_SECONDS
+    )

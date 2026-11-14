@@ -132,8 +132,6 @@ general_settings:
   # from the LITELLM_MASTER_KEY env. Sourced from the container env
   # (compose default sk-alice-local; rotate via alice.env).
   master_key: os.environ/LITELLM_MASTER_KEY
-  # Capture the actual request prompts + responses in the spend logs so
-  # the dashboard's request view shows the messages, not just token
-  # counts. NOTE: this persists full prompt/response content (incl. home
-  # + personal data in Alice's prompts) to the Postgres store.
-  store_prompts_in_spend_logs: true
+  # Off by default: true persists full prompt/response content (incl. personal
+  # data in Alice's prompts) to Postgres. Flip on only while debugging.
+  store_prompts_in_spend_logs: false

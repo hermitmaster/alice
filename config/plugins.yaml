@@ -23,9 +23,10 @@
 # INSTALL_PLUGINS=false` to `docker build`, which skips the install step
 # entirely and produces an alice image with no plugins installed.
 
-plugins:
-  - name: cozylobe
-    source: "git+https://github.com/jcronq/alice-cozylobe@main"
-    services:
-      - alice-cozylobe
-      - alice-cozylobe-reload-watcher
+# Empty by default in this fork: cozylobe (CozyHem home-automation lobe)
+# needs LAN backends this host doesn't have. To re-enable, restore:
+#   - name: cozylobe
+#     source: "git+https://github.com/jcronq/alice-cozylobe@<pinned-commit-sha>"
+#     services: [alice-cozylobe, alice-cozylobe-reload-watcher]
+# Pin to a commit SHA, not @main.
+plugins: []

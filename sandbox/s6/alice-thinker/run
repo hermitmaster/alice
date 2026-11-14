@@ -70,7 +70,19 @@ while true; do
 
     # Determine the wait interval AFTER the wake — wake.py just wrote
     # the new sleep-mode interval to $INTERVAL_FILE.
-    if [ "$mode" = sleep ] && [ -r "$INTERVAL_FILE" ]; then
+    # Active mode also reads the interval file when the operator opted in
+    # to idle backoff (ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN > 0); otherwise
+    # active stays on its fixed cadence.
+    use_interval_file=
+    if [ "$mode" = sleep ]; then
+        use_interval_file=1
+    else
+        case "${ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN:-0}" in
+            ''|0|*[!0-9]*) ;;
+            *) use_interval_file=1 ;;
+        esac
+    fi
+    if [ -n "$use_interval_file" ] && [ -r "$INTERVAL_FILE" ]; then
         cadence=$(cat "$INTERVAL_FILE" 2>/dev/null || echo "")
         case "$cadence" in
             ''|*[!0-9]*) cadence=$(( DEFAULT_REM_CADENCE_MIN * 60 )) ;;

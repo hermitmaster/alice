@@ -1,0 +1,18 @@
+# DRAFT — copy to <mind>/config/model.yml (data/alice-mind/config/model.yml)
+# and restart. Goal: stop every hemisphere defaulting to the subscription's
+# top model. Swap model IDs to taste; thinking is the 24/7 loop, so it gets
+# the cheapest tier.
+speaking:
+  harness: claude-code
+  backend: subscription
+  model: claude-sonnet-5
+
+thinking:
+  harness: claude-code
+  backend: subscription
+  model: claude-haiku-4-5-20251001
+
+viewer:
+  harness: claude-code
+  backend: subscription
+  model: claude-haiku-4-5-20251001

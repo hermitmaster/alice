@@ -637,6 +637,7 @@ def main() -> int:
             prev_seconds=prev_interval,
             mode=mode_obj.name,
             did_work=did_work,
+            active_idle_cap_seconds=backoff.active_idle_backoff_cap_seconds(),
         )
         # Issue #323 fix 2: clamp against MIN_WAKE_PERIOD when the
         # last wake fired recently — see ``apply_min_wake_period``

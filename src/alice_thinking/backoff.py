@@ -10,7 +10,12 @@ Behavior (from
 ``cortex-memory/research/2026-05-01-sleep-mode-exponential-backoff-design.md``,
 revised by issue #323 — wake cadence fixes):
 
-- Active mode: always 5 min — backoff applies to sleep only.
+- Active mode: always 5 min — backoff applies to sleep only, unless the
+  operator opts in via ``ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN`` (minutes,
+  1–30; unset/0 = off). With it set, an active wake that did no
+  meaningful work doubles the interval (5 → 10 → 20 → cap) and any
+  ``did_work`` wake resets to 5 min. Inbox arrivals still interrupt
+  the wait immediately (see the s6 supervisor).
 - Sleep mode + did_work=True: hard reset to 5 min.
 - Sleep mode + did_work=False: double the previous interval, capped
   at 30 min. Ladder: 5 → 10 → 20 → 30. Cap lowered from 40 min by
@@ -56,11 +61,32 @@ MIN_WAKE_PERIOD = 30 * 60  # 1800
 _SLEEP_MODE_PREFIX = "sleep"
 
 
+def active_idle_backoff_cap_seconds(env: "os._Environ[str] | dict[str, str] | None" = None) -> int:
+    """Cap for opt-in active-mode idle backoff, in seconds (0 = disabled).
+
+    Read from ``ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN``. Non-numeric or
+    non-positive values disable it; values above the ladder cap are
+    clamped to ``MAX_INTERVAL_SECONDS`` so the interval file's
+    ``read_interval`` clamp stays consistent.
+    """
+    raw = (env if env is not None else os.environ).get(
+        "ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN", ""
+    )
+    try:
+        minutes = int(str(raw).strip())
+    except ValueError:
+        return 0
+    if minutes <= 0:
+        return 0
+    return min(minutes * 60, MAX_INTERVAL_SECONDS)
+
+
 def next_interval_seconds(
     *,
     prev_seconds: int,
     mode: str,
     did_work: bool,
+    active_idle_cap_seconds: int = 0,
 ) -> int:
     """Compute the next wake-to-wake interval in seconds.
 
@@ -69,6 +95,9 @@ def next_interval_seconds(
     ``"sleep"`` resets to BASE — backoff is sleep-only by design.
     """
     if not mode.startswith(_SLEEP_MODE_PREFIX):
+        if active_idle_cap_seconds > 0 and not did_work:
+            floor = max(prev_seconds, BASE_INTERVAL_SECONDS)
+            return min(floor * 2, active_idle_cap_seconds)
         return BASE_INTERVAL_SECONDS
     if did_work:
         return BASE_INTERVAL_SECONDS

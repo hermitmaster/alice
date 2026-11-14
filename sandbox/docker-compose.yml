@@ -33,18 +33,18 @@ services:
     stop_grace_period: 30m
     ports:
       # viewer — FastAPI UI, served by the in-container alice-viewer s6 service.
-      - "7777:7777"
+      - "${ALICE_BIND_ADDR:-127.0.0.1}:7777:7777"
       # signal-cli RPC — was previously published only on the alice-net bridge
       # from the alice-daemon container. Single container now, so we publish
       # it to the host. Signal client work on the host (manual signal-cli
       # commands) can talk to the same daemon without nsenter/docker exec.
-      - "8080:8080"
+      - "${ALICE_BIND_ADDR:-127.0.0.1}:8080:8080"
       # WebSocket gateway — token-authenticated CLI-session bridge for
       # off-host clients (iOS app, browser tooling). The speaking daemon
       # only binds the listener when ALICE_WS_GATEWAY_TOKEN is set, so
       # exposing the port unconditionally is safe — without a token
       # nothing is listening behind it. Issue #430.
-      - "${ALICE_WS_GATEWAY_PORT:-8765}:${ALICE_WS_GATEWAY_PORT:-8765}"
+      - "${ALICE_BIND_ADDR:-127.0.0.1}:${ALICE_WS_GATEWAY_PORT:-8765}:${ALICE_WS_GATEWAY_PORT:-8765}"
     environment:
       # signal-cli is in the same container; no inter-service hop.
       SIGNAL_API: "http://localhost:8080"
@@ -56,7 +56,7 @@ services:
       # Signal turn. "0" → legacy (signal-cli on :8080 directly).
       SIGNAL_OUTBOUND_PROXY: "${SIGNAL_OUTBOUND_PROXY:-0}"
       STATE_DIR: "/state/worker"
-      TZ: "${ALICE_TZ:-America/New_York}"
+      TZ: "${ALICE_TZ:-America/Chicago}"
       PATH: "/home/alice/alice-tools/bin:/home/alice/.local/bin:/usr/local/bin:/usr/bin:/bin"
       # CLI transport socket — host-shared via /state so external tools
       # (and any future sidecar containers an override adds) can reach
@@ -68,6 +68,9 @@ services:
       # stop_grace_period above so docker doesn't SIGKILL out from under
       # s6's drain. A wake older than that is a hung wake the watchdog
       # should have surfaced; force-kill is fine at that point.
+      # Opt-in: back thinking's active-mode cadence off (5 -> 10 -> 20 -> cap
+      # minutes) while wakes do no work. Unset/0 = fixed 5-min cadence.
+      ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN: "${ALICE_ACTIVE_IDLE_BACKOFF_MAX_MIN:-}"
       S6_SERVICES_GRACETIME: "${S6_SERVICES_GRACETIME:-1800000}"
       S6_KILL_GRACETIME: "${S6_KILL_GRACETIME:-1800000}"
       # GitHub PAT for the gh CLI (and git-over-https via gh's credential
@@ -151,7 +154,7 @@ services:
       # (same value as the litellm service's LITELLM_MASTER_KEY). Read by
       # core.llm_client, lobe_labeler, thinking stage_b/d; pi gets it via the
       # apiKey field in pi-models.json. Must match the proxy's master key.
-      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-alice-local}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in alice.env}"
     volumes:
       # Mind + tools default to <repo>/data/{alice-mind,alice-tools}; alice-up
       # exports ALICE_MIND / ALICE_TOOLS pointing there. Fall back to the
@@ -234,7 +237,7 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       # POSIX rule, not a zone name: the alpine image ships no tzdata, and musl
       # silently falls back to UTC on names it can't resolve.
-      TZ: "${ALICE_STATUS_TZ:-EST5EDT,M3.2.0,M11.1.0}"
+      TZ: "${ALICE_STATUS_TZ:-CST6CDT,M3.2.0,M11.1.0}"
       STATUS_DIR: /srv/status
       SURFACE_DIR: /srv/surface
       UPLOAD_DIR: /srv/uploads
@@ -242,7 +245,7 @@ services:
       PORT: "8095"
       # Where Speaking (inside `alice`) sees UPLOAD_DIR; surfaces list these paths.
       UPLOAD_DIR_ALIAS: /home/alice/alice-mind/inner/status-uploads
-      PUBLIC_URL: "${ALICE_STATUS_PUBLIC_URL:-http://10.20.30.177:8095}"
+      PUBLIC_URL: "${ALICE_STATUS_PUBLIC_URL:-http://localhost:8095}"
       # DB-backed Overview readers (#814) query alice-state.db. The file
       # ships at ~/alice-mind/inner/state/alice-state.db on the host and
       # is bind-mounted read-only below at /srv/state. Point db_readers
@@ -252,7 +255,7 @@ services:
       # service never has a real HOME anyway). See issue #849.
       ALICE_STATE_DB_PATH: /srv/state/alice-state.db
     ports:
-      - "8095:8095"
+      - "${ALICE_BIND_ADDR:-127.0.0.1}:8095:8095"
     volumes:
       - ${ALICE_REPO:-${HOME}/alice}/src/status_site:/app/status_site:ro
       - ${ALICE_MIND:-${HOME}/alice-mind}/inner/status:/srv/status
@@ -300,16 +303,16 @@ services:
       # sites (pi-models.json apiKey, core.llm_client, lobe_labeler,
       # thinking stage_b/d). The :-default keeps fresh checkouts working;
       # rotate via LITELLM_MASTER_KEY in alice.env.
-      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-alice-local}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in alice.env}"
       # Persistence for the dashboard: litellm writes request/spend logs
       # to Postgres (litellm-db). Without DATABASE_URL the UI loads but
       # every analytics view errors ("Database not connected"). litellm
       # runs its own schema migrations against this DB at startup.
-      DATABASE_URL: "postgresql://litellm:${LITELLM_DB_PASSWORD:-litellm-local}@litellm-db:5432/litellm"
+      DATABASE_URL: "postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in alice.env}@litellm-db:5432/litellm"
       # Dashboard login credentials (the /ui form). Distinct from the
       # master key so the login isn't the raw API secret.
       UI_USERNAME: "${LITELLM_UI_USERNAME:-admin}"
-      UI_PASSWORD: "${LITELLM_UI_PASSWORD:-alice-admin}"
+      UI_PASSWORD: "${LITELLM_UI_PASSWORD:?set LITELLM_UI_PASSWORD in alice.env}"
       # Keep model config in the YAML (source of truth), not the DB.
       STORE_MODEL_IN_DB: "False"
     depends_on:
@@ -325,7 +328,7 @@ services:
       # set real LITELLM_MASTER_KEY / LITELLM_UI_PASSWORD in alice.env if
       # the LAN isn't trusted. Inter-container traffic still uses
       # alice-litellm:4000 on the compose bridge.
-      - "4000:4000"
+      - "${ALICE_BIND_ADDR:-127.0.0.1}:4000:4000"
     healthcheck:
       # The litellm image ships no curl/wget — only python. Probe
       # liveliness with the stdlib so the healthcheck can actually pass
@@ -352,7 +355,7 @@ services:
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: litellm
-      POSTGRES_PASSWORD: "${LITELLM_DB_PASSWORD:-litellm-local}"
+      POSTGRES_PASSWORD: "${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in alice.env}"
     volumes:
       - litellm-pgdata:/var/lib/postgresql/data
     healthcheck:
