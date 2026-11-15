@@ -258,6 +258,8 @@ services:
       - "${ALICE_BIND_ADDR:-127.0.0.1}:8095:8095"
     volumes:
       - ${ALICE_REPO:-${HOME}/alice}/src/status_site:/app/status_site:ro
+      # status_site imports core.forge_repos (+ core.config.personae); stdlib-only.
+      - ${ALICE_REPO:-${HOME}/alice}/src/core:/app/core:ro
       - ${ALICE_MIND:-${HOME}/alice-mind}/inner/status:/srv/status
       - ${ALICE_MIND:-${HOME}/alice-mind}/inner/surface:/srv/surface
       - ${ALICE_MIND:-${HOME}/alice-mind}/inner/status-uploads:/srv/uploads

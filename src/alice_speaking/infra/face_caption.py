@@ -53,7 +53,9 @@ DEFAULT_LITELLM_BASE_URL = "http://alice-litellm:4000/v1"
 DEFAULT_LITELLM_MODEL = os.environ.get("LITELLM_FACE_CAPTION_MODEL", "")
 # Master key shared by every LiteLLM call site; matches
 # ``LITELLM_MASTER_KEY`` env / sandbox compose default.
-DEFAULT_LITELLM_API_KEY = "sk-alice-local"
+# Compose exports the proxy's master key as LITELLM_MASTER_KEY; fall back to
+# the legacy default only for runs outside compose.
+DEFAULT_LITELLM_API_KEY = os.environ.get("LITELLM_MASTER_KEY") or "sk-alice-local"
 LITELLM_MAX_TOKENS = 64
 
 # Caption sidecar limit. The 16x2 LCD is 16 chars wide x 2 rows = 32
