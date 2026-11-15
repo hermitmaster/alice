@@ -5,14 +5,14 @@
 speaking:
   harness: claude-code
   backend: subscription
-  model: claude-sonnet-5
+  model: claude-sonnet-5-5
 
 thinking:
   harness: claude-code
   backend: subscription
-  model: claude-haiku-4-5-20251001
+  model: claude-haiku-5-5
 
 viewer:
   harness: claude-code
   backend: subscription
-  model: claude-haiku-4-5-20251001
+  model: claude-haiku-5-5
